@@ -1,0 +1,50 @@
+# ============================================
+# Configuration d'entrainement YOLOv11n-seg
+# ============================================
+
+# --- Modele ---
+model: yolo11n-seg.pt          # Poids de depart (pretraine COCO)
+# Variantes disponibles si besoin de plus de precision :
+# yolo11s-seg.pt  (~9.4M params)
+# yolo11m-seg.pt  (~20M params)
+# yolo11l-seg.pt  (~25M params)
+# yolo11x-seg.pt  (~56M params)
+
+# --- Dataset ---
+data: configs/aerialcsp_dataset.yaml
+
+# --- Hyperparametres d'entrainement ---
+epochs: 200                    # Meme que le benchmark AerialCSP
+batch: 16                     # A ajuster selon la VRAM du GPU
+imgsz: 640                    # Taille d'entree des images
+patience: 50                  # Early stopping (arret si pas d'amelioration)
+
+# --- Optimiseur ---
+optimizer: auto                # AdamW par defaut
+lr0: 0.01                     # Learning rate initial
+lrf: 0.01                     # Learning rate final (fraction de lr0)
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 3.0
+warmup_momentum: 0.8
+
+# --- Augmentation ---
+hsv_h: 0.015                  # Variation de teinte
+hsv_s: 0.7                    # Variation de saturation
+hsv_v: 0.4                    # Variation de luminosite
+degrees: 0.0                  # Rotation (0 = pas de rotation)
+translate: 0.1                # Translation
+scale: 0.5                    # Mise a echelle
+fliplr: 0.5                   # Flip horizontal
+flipud: 0.0                   # Flip vertical (0 pour images aeriennes orientees)
+mosaic: 1.0                   # Augmentation mosaique
+mixup: 0.0                    # Mixup
+
+# --- Seuils ---
+conf: 0.25                    # Seuil de confiance pour les predictions
+iou: 0.7                      # Seuil IoU pour NMS
+
+# --- Sauvegarde ---
+project: experiments
+name: aerialcsp_yolo11n_seg
+save_period: 25                # Sauvegarder un checkpoint tous les 25 epochs

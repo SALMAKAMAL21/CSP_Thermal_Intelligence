@@ -1,0 +1,33 @@
+# ============================================
+# Configuration du dataset AerialCSP
+# ============================================
+# A adapter une fois le dataset recu
+# Le dataset contient 18 058 images (split 75/15/10)
+#
+# Structure attendue apres extraction :
+# data/aerialcsp/
+#   |-- train/
+#   |   |-- images/
+#   |   |-- labels/
+#   |-- val/
+#   |   |-- images/
+#   |   |-- labels/
+#   |-- test/
+#   |   |-- images/
+#   |   |-- labels/
+
+# Chemin racine du dataset (a adapter)
+path: ../data/aerialcsp
+
+# Chemins relatifs au path
+train: train/images
+val: val/images
+test: test/images
+
+# 5 classes de composants CSP
+names:
+  0: mirror
+  1: torque_tube
+  2: supporting_structure
+  3: hce_support
+  4: hce
