@@ -12,8 +12,10 @@ build/
 
 # Jupyter
 .ipynb_checkpoints/
+notebooks/
 
 # Data (trop volumineux pour git)
+data/
 data/raw/
 data/processed/
 *.jpg
@@ -32,7 +34,6 @@ data/processed/
 *.engine
 *.safetensors
 weights/
-models/checkpoints/
 
 # MLflow
 mlruns/
@@ -47,3 +48,16 @@ Thumbs.db
 
 # Environment
 .env
+.env.local
+
+# Frontend dependencies
+frontend/node_modules/
+frontend/.next/
+
+# Archives
+*.zip
+
+# Documents
+reports/
+*.docx
+~$*.docx

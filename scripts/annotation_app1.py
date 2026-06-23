@@ -26,6 +26,131 @@ st.set_page_config(
     layout="wide"
 )
 
+st.markdown(
+    """
+    <style>
+    :root {
+        --bg-dark: #05070d;
+        --bg-card: #0f1624;
+        --bg-card-hover: #141d2f;
+        --border-muted: #1f2a3d;
+        --text-primary: #f5f7fb;
+        --accent: #22d3ee;
+        --accent-strong: #38bdf8;
+    }
+    body { background-color: var(--bg-dark); }
+    .stApp { background: var(--bg-dark); color: var(--text-primary); }
+    .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1200px; }
+    section[data-testid="stSidebar"] { background: #04050a; }
+    section[data-testid="stSidebar"] .stSidebarContent { padding: 2rem 1.5rem; }
+    section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {
+        color: var(--text-primary);
+    }
+    section[data-testid="stSidebar"] .stTextInput input,
+    section[data-testid="stSidebar"] .stNumberInput input,
+    section[data-testid="stSidebar"] .stSlider,
+    section[data-testid="stSidebar"] .stSlider > div { color: var(--text-primary); }
+    div[data-testid="stFileUploader"] {
+        background: var(--bg-card);
+        border: 1px solid var(--border-muted);
+        border-radius: 18px;
+        padding: 1.25rem;
+        box-shadow: inset 0 0 0 1px rgba(34,211,238,0.05);
+    }
+    div[data-testid="stFileUploader"]:focus-within {
+        box-shadow: inset 0 0 0 1px var(--accent), 0 -4px 0 0 rgba(0,0,0,0.7) inset;
+    }
+    .hero-card {
+        background: linear-gradient(135deg,#0f172a,#101936);
+        padding: 2rem;
+        border-radius: 24px;
+        border: 1px solid var(--border-muted);
+        box-shadow: 0 25px 65px rgba(15,23,42,0.55);
+        margin-bottom: 1.5rem;
+    }
+    .hero-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: .5rem;
+        font-size: 0.85rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #a5b4fc;
+        background: rgba(79,70,229,0.15);
+        padding: .35rem .9rem;
+        border-radius: 999px;
+        border: 1px solid rgba(99,102,241,0.4);
+    }
+    .hero-card h1 { margin-top: 1rem; color: var(--text-primary); }
+    .hero-card p { color: #cbd5f5; max-width: 60ch; }
+    .quick-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px,1fr));
+        gap: 0.9rem;
+        margin-bottom: 1.25rem;
+    }
+    .quick-card {
+        background: var(--bg-card);
+        border-radius: 16px;
+        border: 1px solid var(--border-muted);
+        padding: 0.95rem 1rem;
+        font-size: 0.95rem;
+        color: #d1d8f0;
+        position: relative;
+        transition: all 0.2s ease;
+    }
+    .quick-card::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 16px;
+        border-top: 4px solid transparent;
+        transition: border-color 0.2s ease;
+    }
+    .quick-card:hover, .quick-card:focus-within { background: var(--bg-card-hover); }
+    .quick-card:hover::before, .quick-card:focus-within::before { border-top-color: var(--accent-strong); }
+    .quick-card span {
+        display: inline-flex;
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        background: rgba(34,211,238,0.15);
+        color: var(--accent);
+        font-weight: 600;
+        align-items: center;
+        justify-content: center;
+        margin-right: 0.6rem;
+    }
+    .quick-card strong { color: var(--text-primary); }
+    .stButton>button {
+        background: linear-gradient(90deg,#0ea5e9,#22d3ee);
+        border: none;
+        color: #03121e;
+        font-weight: 600;
+        border-radius: 14px;
+        padding: 0.65rem 1.2rem;
+    }
+    .stButton>button:hover { filter: brightness(1.05); }
+    .stStatus, [data-testid="stStatus"] {
+        border-radius: 16px;
+        border: 1px solid var(--border-muted);
+        background: var(--bg-card);
+        color: var(--text-primary);
+    }
+    .stDataFrame { border: 1px solid var(--border-muted); border-radius: 16px; }
+    .metric-row div[data-testid="stMetricValue"] { color: var(--text-primary); }
+    .compact-tip {
+        background: rgba(34,211,238,0.08);
+        border: 1px solid rgba(34,211,238,0.25);
+        color: #9de0ff;
+        padding: 0.75rem 1rem;
+        border-radius: 16px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ── Classes ───────────────────────────────────────────────────────────────────
 CLASS_MAP = {
     "receiver tube":     0, "receiver": 0, "tube": 0, "hce": 0,
@@ -235,8 +360,28 @@ def bbox_to_yolo(bbox, class_id, h, w):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    st.title("🌞 CSP Auto-Annotation")
-    st.caption("Florence-2 via HuggingFace Spaces · Gratuit · Aucun modèle local")
+    st.markdown(
+        """
+        <div class="hero-card">
+            <div class="hero-pill">Green Energy Park · SaaS Lab</div>
+            <h1>Annotation CSP nouvelle génération</h1>
+            <p>Automatisez vos annotations de tubes récepteurs et miroirs via Florence-2 hébergé sur HuggingFace.
+            Interface sombre, feedback instantané, export YOLO prêt pour l'entraînement.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="quick-grid">
+            <div class="quick-card"><span>1</span><strong>Charger</strong><br/>Déposez votre image CSP haute résolution.</div>
+            <div class="quick-card"><span>2</span><strong>Annoter</strong><br/>Florence-2 génère les boîtes en quelques secondes.</div>
+            <div class="quick-card"><span>3</span><strong>Exporter</strong><br/>Téléchargez l'image annotée et le label YOLO.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     with st.sidebar:
         st.header("Configuration")
@@ -248,10 +393,13 @@ def main():
             help="Optionnel — accélère l'accès et évite les rate limits"
         )
 
-        st.info(
-            "Sans token : fonctionne mais plus lent\n\n"
-            "Avec token gratuit : plus rapide\n\n"
-            "→ huggingface.co → Settings → Access Tokens → New Token (Read)"
+        st.markdown(
+            """
+            <div class="compact-tip">
+                <strong>Astuce vitesse :</strong> crée un token HuggingFace (Read) pour éviter la file d'attente.
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
         st.divider()
@@ -268,16 +416,21 @@ def main():
 
     # ── Upload ────────────────────────────────────────────────────────────────
     uploaded = st.file_uploader(
-        "Upload une image CSP",
+        "Téléverser une image CSP",
         type=["jpg","jpeg","png","bmp","tiff"]
     )
 
     if uploaded is None:
-        st.info("Upload une image pour démarrer.")
-        c1,c2,c3 = st.columns(3)
-        c1.markdown("**1. Upload**\nImage drone ou thermique CSP")
-        c2.markdown("**2. Florence-2**\nDétection via HuggingFace Space")
-        c3.markdown("**3. Export**\nAnnotation YOLO11 téléchargeable")
+        st.markdown(
+            """
+            <div class="quick-grid">
+                <div class="quick-card" tabindex="0"><span>1</span>Glissez votre image dans la zone ci-dessus.</div>
+                <div class="quick-card" tabindex="0"><span>2</span>Appuyez sur <strong>Annoter</strong> pour lancer Florence-2.</div>
+                <div class="quick-card" tabindex="0"><span>3</span>Récupérez vos exports YOLO11 instantanément.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         return
 
     image_pil = Image.open(uploaded).convert("RGB")

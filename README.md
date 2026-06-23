@@ -85,7 +85,6 @@ Sortie
 - Modele retenu : **YOLOv11n-seg** (nano, 2.6M params) - leger pour usage drone
 - Pipeline : Drone RGB -> YOLOv11n-seg (segmentation tube) -> ROI -> Classification anomalies + donnees capteurs
 - Framework : PyTorch + Ultralytics
-- Option SAM2 en complement pour masques plus precis si necessaire
 - Nomenclature YOLO clarifiee : `yolo11n-seg` = version 11 + nano (taille) + segmentation (tache)
 - Possibilite de scaler vers `s`, `m`, `l` si precision insuffisante
 
@@ -128,7 +127,7 @@ Sortie
 | Langage | Python 3.12 |
 | Deep Learning | PyTorch >= 2.2 |
 | Computer Vision | OpenCV, Albumentations |
-| Detection / Segmentation | YOLOv11-seg (Ultralytics), SAM2 |
+| Detection / Segmentation | YOLOv11-seg (Ultralytics) |
 | Donnees | Pandas, NumPy, scikit-learn |
 | Visualisation | Matplotlib, Seaborn, TensorBoard |
 | Suivi d'experiences | MLflow |
@@ -242,7 +241,6 @@ uvicorn src.inference.api:app --host 0.0.0.0 --port 8000
 
 ### Outils et Modeles
 - [x] Ultralytics YOLOv11-seg (ultralytics.com)
-- [x] SAM2 - Segment Anything Model 2 (GitHub: facebookresearch/sam2)
 - [x] Volateq - Solution commerciale drone CSP (volateq.de)
 
 ### Solutions Existantes (Etat de l'Art)
@@ -372,3 +370,261 @@ Type d'anomalie + Localisation + Confiance + Recommandation
 ---
 
 *Derniere mise a jour : 11 Mars 2026*
+
+---
+
+## Pipeline Frontend/Backend (Etat Actuel)
+
+Cette section decrit le systeme de test en local (annotation image/video) qui tourne avec Next.js + FastAPI.
+
+### Objectif Metier
+
+- detecter les tubes recepteurs par IA
+- appliquer la convention metier:
+  - `tube_ref` = tube du haut
+  - `tube_test` = tube du bas
+
+Comme les deux tubes se ressemblent fortement, la distinction visuelle pure est instable. La convention haut/bas est appliquee en post-traitement pour stabiliser les labels.
+
+### Architecture
+
+1. Frontend Next.js (`frontend/`)
+- Upload image/video RGB ou thermique
+- Extraction de frames video
+- Appel des routes API Next:
+  - `GET /api/segment-check`
+  - `POST /api/segment-predict`
+- Rendu des annotations (bbox/polygones) sur canvas
+- Export video annotee `.webm`
+
+2. Proxy API Next.js
+- Forward vers backend Python configure par `SEGMENTATION_API_URL`
+- Gestion d'erreurs claire (status backend + payload)
+
+3. Backend FastAPI (`src/inference/api.py`)
+- Charge le modele YOLO (priorite `ml/best_model.pt`)
+- Endpoint `/predict`: infer sur image
+- Applique la regle metier haut/bas pour `tube_ref`/`tube_test`
+- Retourne detections JSON
+
+### Flux Video
+
+1. Upload video
+2. Echantillonnage de frames
+3. Inference frame par frame
+4. Stabilisation temporelle (comble les trous intermittents)
+5. Relecture video + overlays
+6. Export video annotee
+
+### Configuration rapide
+
+Backend:
+```bash
+uvicorn src.inference.api:app --host 0.0.0.0 --port 8002 --reload
+```
+
+Frontend:
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+`frontend/.env.local`:
+```env
+SEGMENTATION_API_URL=http://127.0.0.1:8002
+```
+
+### Documentation detaillee
+
+Le guide complet (pas a pas) est dans:
+- `frontend/README.md`
+
+---
+
+## Anomaly Detection Sans Labels Reel (Ref/Test)
+
+### Pourquoi cette approche
+
+Ton dataset actuel contient uniquement des tubes sains. Donc on ne peut pas entrainer directement un classifieur supervise "normal vs anomalie reelle".
+
+La strategie mise en place dans le notebook `notebooks/train_anomaly_ref_test_zero_anomaly.ipynb` est:
+
+1. Extraire les crops des deux tubes (`tube_ref` en haut, `tube_test` en bas)
+2. Garder `tube_ref` intact (reference saine)
+3. Injecter des anomalies synthetiques uniquement dans `tube_test`
+4. Entrainer un modele binaire sur paires:
+   - paire normale -> label `0`
+   - paire anormale synthetique -> label `1`
+
+Le modele apprend alors un **score de deviation** de `tube_test` par rapport a `tube_ref`.
+
+### Comment les anomalies synthetiques sont creees
+
+Fonction: `add_synthetic_anomaly(img)` dans le notebook.
+
+Modes utilises:
+- `scratch`: traits/rayures aleatoires (`draw.line`)
+- `blob`: taches locales claires/sombres (`draw.ellipse`)
+- `occlusion`: masque rectangulaire local (`draw.rectangle`)
+- `blur_patch`: flou local d'un patch (`ImageFilter.GaussianBlur`)
+
+Les parametres (position, taille, intensite) sont randomises a chaque appel.
+
+### Bibliotheques utilisees
+
+- `Pillow (PIL)`: manip image + dessin des anomalies synthetiques
+- `NumPy`: operations numeriques
+- `PyTorch`: modele, entrainement, dataloaders
+- `torchvision`: backbone (`resnet18`), transformations
+- `scikit-learn`: metriques (`roc_auc_score`, `average_precision_score`)
+
+---
+
+## Comparaison Honnette: Ref/Test Synthetique vs PatchCore/Autoencoder
+
+### Option A - Ref/Test avec anomalies synthetiques (actuelle)
+
+Avantages:
+- Exploite ta connaissance metier forte: `tube_ref` est sain
+- Simple a deployer et rapide a iterer
+- Souvent efficace meme sans anomalies reelles
+- Donne un score interpretable de divergence `test` vs `ref`
+
+Limites:
+- Le modele apprend les anomalies **qu'on simule** (biais de simulation)
+- Peut manquer des vraies anomalies qui ne ressemblent pas aux syntheses
+- Calibration seuil indispensable sur donnees terrain
+
+### Option B - PatchCore / Autoencoder (one-class normal)
+
+Principe:
+- apprendre uniquement la distribution du "normal"
+- toute deviation future -> anomalie
+
+Avantages:
+- Plus conforme au setup "zero anomaly labels"
+- Souvent meilleur pour detecter anomalies inattendues
+- PatchCore est fort en detection d'anomalies texture/locales
+
+Limites:
+- Plus sensible a changement de domaine (RGB/thermique, eclairage, angle)
+- Peut produire plus de faux positifs si normal train pas assez divers
+- Calibration + validation terrain encore plus importantes
+
+### Recommandation brute pour ton cas
+
+Court terme (livrable rapide):
+- garder l'approche actuelle Ref/Test synthetique (deja integree et exploitable)
+
+Moyen terme (plus robuste scientifiquement):
+- ajouter un benchmark PatchCore (et/ou autoencoder) en parallele
+- comparer sur memes videos terrain:
+  - taux de faux positifs
+  - sensibilite aux anomalies visuelles/thermiques
+  - stabilite temporelle en video
+
+Decision pratique:
+- si objectif prioritaire = operationnel vite -> Ref/Test synthetique
+- si objectif prioritaire = detection d'inconnu sans labels -> PatchCore a privilegier apres benchmark
+
+---
+
+## Historique Q/R (Session)
+
+### Q: Creer un frontend Next.js pour upload video + temperatures + connexion IA + PDF
+R: Frontend cree dans `frontend/` avec:
+- upload video
+- saisie temperatures
+- test connexion backend segmentation
+- generation PDF (phase initiale)
+
+### Q: Brancher le test reel sur le modele segmentation
+R: Flux video reel implemente:
+- extraction frames
+- appel `/predict`
+- affichage resultats IA
+- export video annotee
+
+### Q: Changer objectif vers video annotee uniquement (sans comptage, sans PDF)
+R: Pipeline adapte:
+- sortie = video annotee
+- support RGB + thermique
+- telechargement `.webm`
+
+### Q: Probleme 500/404 sur `/api/segment-predict`
+R: Ajout debug proxy:
+- remontee `backendStatus`, `backendUrl`, `backendResponse`
+- correction config backend/port
+
+### Q: Utiliser port 8002
+R: Config frontend/backend basculee sur `8002`.
+
+### Q: Lier le modele `yolo_seg`/`best_model`
+R: API mise a jour pour resolution automatique du modele avec priorite:
+1. `MODEL_PATH`
+2. `ml/best_model.pt`
+3. autres fallbacks
+
+### Q: Ajouter test image pour comparer image vs video
+R: Mode image ajoute dans frontend avec annotation directe et export image.
+
+### Q: Notebook entrainement YOLO26 selon dataset
+R: Notebook cree puis optimise (YOLO26s, split analyse, 2 phases freeze/unfreeze).
+
+### Q: Diagnostic de la derive `tube_ref/tube_test`
+R: Audit montre:
+- classes quasi identiques visuellement
+- convention top/bottom predominante
+- besoin post-regle metier et split par video
+
+### Q: Comparer datasets `Tubes CSP.v1i.yolo26.zip` vs `Tubes CSP.yolov11.zip`
+R:
+- `yolo26`: split complet, compact
+- `yolov11`: plus lourd, meilleure resolution, mais split incomplet
+- recommandation: creer split propre par video pour `yolov11`
+
+### Q: Faire script de split par video et l'executer
+R: Script cree: `scripts/split_yolov11_by_video.py`
+- dataset genere: `data/tubes_csp_yolov11_grouped`
+- train/valid/test coerents
+
+### Q: Optimiser avec regle metier haut/bas
+R:
+- notebook adapte vers logique metier
+- backend applique `tube_ref=haut`, `tube_test=bas`
+
+### Q: Thermique: trous de detection au milieu
+R:
+- stabilisation temporelle ajoutee dans frontend
+- recommandation d'ajuster `conf` (seuil confiance)
+
+### Q: Demande d'explication architecture complete
+R:
+- documentation "cours" ajoutee dans `frontend/README.md`
+- section resume ajoutee dans `README.md` racine
+
+### Q: Creer notebook anomaly detection sans anomalies reelles
+R: Notebook cree: `notebooks/train_anomaly_ref_test_zero_anomaly.ipynb`
+- approche ref/test
+- anomalies synthetiques sur `tube_test`
+- score anomalie binaire
+
+### Q: Comprendre generation anomalies synthetiques
+R: Explication + ajout modes CSP-realistes:
+- `longitudinal_defect`
+- `thermal_band_irregularity`
+- `hotspot_localized`
+- `endcap_defect`
+
+### Q: Clarifier YOLO-only vs architecture 2 etapes
+R:
+- comparaison honnete documentee
+- YOLO-only propose pour delivery simple
+
+### Q: Demande notebook YOLO-only et fine-tuning depuis `best.pt` en segmentation
+R: Notebook cree et corrige:
+- `notebooks/train_anomaly_yolo_only_synth.ipynb`
+- fine-tuning depuis `best.pt`
+- `task='segment'`
+

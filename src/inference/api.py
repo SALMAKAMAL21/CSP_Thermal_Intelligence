@@ -13,7 +13,9 @@ Endpoints:
 """
 
 import io
+import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -24,8 +26,34 @@ from fastapi.responses import JSONResponse
 from PIL import Image
 from ultralytics import YOLO
 
+from .thermal_anomaly import analyze_ref_test_thermal
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-MODEL_PATH = PROJECT_ROOT / "experiments" / "aerialcsp_yolo11n_seg" / "weights" / "best.pt"
+
+
+def resolve_model_path() -> Path:
+    """Resout le chemin du modele avec priorite a MODEL_PATH puis yolo_seg.pt."""
+    env_path = os.getenv("MODEL_PATH")
+    if env_path:
+        return Path(env_path)
+
+    candidates = [
+        PROJECT_ROOT / "ml" / "best_model.pt",
+        PROJECT_ROOT / "ml" / "yolo_seg.pt",
+        PROJECT_ROOT / "src" / "models" / "best_model.pt",
+        PROJECT_ROOT / "src" / "models" / "yolo_seg.pt",
+        PROJECT_ROOT / "src" / "models" / "yolo-seg.pt",
+        PROJECT_ROOT / "src" / "models" / "csp_seg1.pt",
+        PROJECT_ROOT / "csp_seg1.pt",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    # Fallback: premiere cible attendue
+    return candidates[0]
+
+
+MODEL_PATH = resolve_model_path()
 
 app = FastAPI(
     title="Green Energy Park - CSP Tube Detection API",
@@ -35,6 +63,134 @@ app = FastAPI(
 
 # Variable globale pour le modele
 model = None
+
+
+@dataclass
+class TubeTrackState:
+    tube_ref: dict | None = None
+    tube_test: dict | None = None
+    miss_count: int = 0
+    updated_at: float = 0.0
+
+
+TRACKER_TTL_SECONDS = 120
+TRACKER_MAX_MISSES = 4
+SESSION_TRACKERS: dict[str, TubeTrackState] = {}
+
+
+def _cleanup_session_trackers() -> None:
+    now = time.time()
+    expired = [
+        session_id
+        for session_id, state in SESSION_TRACKERS.items()
+        if now - state.updated_at > TRACKER_TTL_SECONDS
+    ]
+    for session_id in expired:
+        SESSION_TRACKERS.pop(session_id, None)
+
+
+def _detection_center(det: dict) -> tuple[float, float]:
+    bbox = det.get("bbox")
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        return (float("inf"), float("inf"))
+    return ((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
+
+
+def _distance(det_a: dict, det_b: dict) -> float:
+    ax, ay = _detection_center(det_a)
+    bx, by = _detection_center(det_b)
+    return float(np.hypot(ax - bx, ay - by))
+
+
+def _detection_score(det: dict) -> float:
+    confidence = float(det.get("confidence", 0.0) or 0.0)
+    area = float(det.get("mask_area", 0.0) or 0.0)
+    if area <= 0:
+        bbox = det.get("bbox") or [0, 0, 0, 0]
+        area = max(0.0, (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]))
+    return confidence * max(area, 1.0)
+
+
+def _clone_detection(det: dict, class_name: str | None = None) -> dict:
+    cloned = dict(det)
+    if "bbox" in cloned and isinstance(cloned["bbox"], list):
+        cloned["bbox"] = list(cloned["bbox"])
+    if "mask_polygon" in cloned and isinstance(cloned["mask_polygon"], list):
+        cloned["mask_polygon"] = [list(point) for point in cloned["mask_polygon"]]
+    if class_name is not None:
+        cloned["class_name"] = class_name
+    return cloned
+
+
+def _assign_roles_from_current(detections: list[dict]) -> list[dict]:
+    ordered = sorted(
+        detections,
+        key=lambda det: ((det["bbox"][1] + det["bbox"][3]) / 2.0),
+    )
+    if len(ordered) < 2:
+        return []
+    top = _clone_detection(ordered[0], "tube_ref")
+    bottom = _clone_detection(ordered[-1], "tube_test")
+    return [top, bottom]
+
+
+def _apply_tube_tracking(detections: list[dict], session_id: str | None, reset_tracker: bool) -> list[dict]:
+    tube_like_names = {"tube_ref", "tube_test", "tube", "hce"}
+    tube_candidates = [det for det in detections if det.get("class_name") in tube_like_names]
+    if not tube_candidates:
+        return detections
+
+    current = sorted(tube_candidates, key=_detection_score, reverse=True)[:2]
+    current = sorted(current, key=lambda det: ((det["bbox"][1] + det["bbox"][3]) / 2.0))
+
+    if not session_id:
+        if len(current) >= 2:
+            assigned = _assign_roles_from_current(current)
+            for source, mapped in zip(current[:2], assigned):
+                source["class_name"] = mapped["class_name"]
+        return detections
+
+    _cleanup_session_trackers()
+    if reset_tracker or session_id not in SESSION_TRACKERS:
+        SESSION_TRACKERS[session_id] = TubeTrackState(updated_at=time.time())
+
+    state = SESSION_TRACKERS[session_id]
+    state.updated_at = time.time()
+
+    if len(current) >= 2:
+        assigned = _assign_roles_from_current(current)
+        state.tube_ref = assigned[0]
+        state.tube_test = assigned[1]
+        state.miss_count = 0
+        for source, mapped in zip(current[:2], assigned):
+            source["class_name"] = mapped["class_name"]
+        return detections
+
+    if len(current) == 1 and state.tube_ref is not None and state.tube_test is not None:
+        current_det = current[0]
+        distance_to_ref = _distance(current_det, state.tube_ref)
+        distance_to_test = _distance(current_det, state.tube_test)
+        if distance_to_ref <= distance_to_test:
+            current_det["class_name"] = "tube_ref"
+            state.tube_ref = _clone_detection(current_det, "tube_ref")
+        else:
+            current_det["class_name"] = "tube_test"
+            state.tube_test = _clone_detection(current_det, "tube_test")
+        state.miss_count = 0
+        return detections
+
+    if len(current) == 1:
+        current[0]["class_name"] = "tube_ref" if _detection_center(current[0])[1] < float("inf") else "tube"
+        return detections
+
+    if state.tube_ref is not None and state.tube_test is not None and state.miss_count < TRACKER_MAX_MISSES:
+        state.miss_count += 1
+        return detections
+
+    state.tube_ref = None
+    state.tube_test = None
+    state.miss_count = 0
+    return detections
 
 
 @app.on_event("startup")
@@ -89,6 +245,9 @@ async def predict(
     image: UploadFile = File(...),
     conf: float = 0.25,
     iou: float = 0.45,
+    analyze_thermal: bool = True,
+    session_id: str | None = None,
+    reset_tracker: bool = False,
 ):
     """
     Segmentation d'une image drone.
@@ -150,13 +309,35 @@ async def predict(
 
         detections.append(detection)
 
+    # Post-regle metier: si on detecte des tubes, forcer la convention
+    # tube_ref = tube le plus haut, tube_test = tube le plus bas.
+    # Cela evite les inversions de classes quand les deux tubes se ressemblent visuellement.
+    detections = _apply_tube_tracking(detections, session_id=session_id, reset_tracker=reset_tracker)
+
     # Filtrer pour ne garder que les HCE (tubes recepteurs) si demande
-    hce_detections = [d for d in detections if d["class_name"] == "hce"]
+    hce_detections = [d for d in detections if d["class_name"] in {"hce", "tube_ref", "tube_test", "tube"}]
+
+    if analyze_thermal:
+        try:
+            thermal_anomaly = analyze_ref_test_thermal(img_np, detections)
+        except Exception as exc:
+            thermal_anomaly = {
+                "status": "error",
+                "enabled": True,
+                "error": str(exc),
+            }
+    else:
+        thermal_anomaly = {
+            "status": "disabled",
+            "enabled": False,
+            "reason": "thermal analysis not requested",
+        }
 
     return {
         "inference_time_ms": round(inference_time, 1),
         "image_size": {"width": img_np.shape[1], "height": img_np.shape[0]},
         "total_detections": len(detections),
         "hce_count": len(hce_detections),
+        "thermal_anomaly": thermal_anomaly,
         "detections": detections,
     }
