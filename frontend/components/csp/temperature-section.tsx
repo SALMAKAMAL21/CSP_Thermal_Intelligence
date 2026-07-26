@@ -1,10 +1,12 @@
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { FiPlus } from "react-icons/fi";
 import {
+  getTemperaturePlaceholder,
+  getTemperaturePointLabel,
   formatAverage,
-  REF_TEMP_PLACEHOLDERS,
-  TEMPERATURE_POINTS,
-  TEST_TEMP_PLACEHOLDERS,
+  REQUIRED_TEMPERATURE_COUNT,
   type TemperatureStats
 } from "@/lib/thermal";
 
@@ -13,6 +15,7 @@ type TemperatureSectionProps = {
   testStats: TemperatureStats;
   tubeRefTemps: string[];
   tubeTestTemps: string[];
+  onAddTemperatureField: () => void;
   onTemperatureChange: (tube: "ref" | "test", index: number, value: string) => void;
 };
 
@@ -21,6 +24,7 @@ export function TemperatureSection({
   testStats,
   tubeRefTemps,
   tubeTestTemps,
+  onAddTemperatureField,
   onTemperatureChange
 }: TemperatureSectionProps) {
   return (
@@ -32,22 +36,33 @@ export function TemperatureSection({
       <div className="tube-temperature-list">
         <TubeTemperatureCard
           average={formatAverage(refStats.average)}
-          complete={refStats.completed === 4}
-          label="Tube Référence"
+          complete={refStats.completed >= REQUIRED_TEMPERATURE_COUNT}
+          label="tube-ref"
           tone="ref"
           values={tubeRefTemps}
-          placeholders={REF_TEMP_PLACEHOLDERS}
           onChange={(index, value) => onTemperatureChange("ref", index, value)}
         />
         <TubeTemperatureCard
           average={formatAverage(testStats.average)}
-          complete={testStats.completed === 4}
-          label="Tube Test"
+          complete={testStats.completed >= REQUIRED_TEMPERATURE_COUNT}
+          label="tube-test"
           tone="test"
           values={tubeTestTemps}
-          placeholders={TEST_TEMP_PLACEHOLDERS}
           onChange={(index, value) => onTemperatureChange("test", index, value)}
         />
+      </div>
+
+      <div className="temperature-add-row">
+        <Button
+          className="temperature-add-shared"
+          variant="outline"
+          size="sm"
+          type="button"
+          onClick={onAddTemperatureField}
+          aria-label="Ajouter un champ thermique aux deux tubes"
+        >
+          <FiPlus aria-hidden="true" />
+        </Button>
       </div>
     </section>
   );
@@ -58,36 +73,41 @@ type TubeTemperatureCardProps = {
   complete: boolean;
   label: string;
   onChange: (index: number, value: string) => void;
-  placeholders: readonly string[];
   tone: "ref" | "test";
   values: string[];
 };
 
-function TubeTemperatureCard({ average, complete, label, onChange, placeholders, tone, values }: TubeTemperatureCardProps) {
+function TubeTemperatureCard({ average, complete, label, onChange, tone, values }: TubeTemperatureCardProps) {
   return (
     <Card className={`tube-card ${tone === "test" ? "test-card" : "ref-card"} ${complete ? "is-complete" : ""}`} aria-label={`Températures ${tone}`}>
       <div className="tube-card-header">
-        <h3>{label}</h3>
-        <div className="tube-average">
-          <span>Moyenne</span>
-          <strong>{average}</strong>
+        <div>
+          <h3>{label}</h3>
+        </div>
+        <div className="tube-header-actions">
+          <div className="tube-average">
+            <span>Moyenne</span>
+            <strong>{average}</strong>
+          </div>
         </div>
       </div>
 
       <div className="measure-grid">
-        {TEMPERATURE_POINTS.map((point, index) => (
-          <label className={`measure-input ${values[index] ? "is-filled" : ""}`} htmlFor={`tube-${tone}-${point}`} key={point}>
+        {values.map((value, index) => {
+          const point = getTemperaturePointLabel(index);
+          return (
+          <label className={`measure-input ${value ? "is-filled" : ""}`} htmlFor={`tube-${tone}-${point}`} key={point}>
             <span>{point} (°C)</span>
             <Input
               id={`tube-${tone}-${point}`}
               type="number"
               inputMode="decimal"
-              placeholder={placeholders[index]}
-              value={values[index]}
+              placeholder={getTemperaturePlaceholder(tone, index)}
+              value={value}
               onChange={(event) => onChange(index, event.target.value)}
             />
           </label>
-        ))}
+        )})}
       </div>
     </Card>
   );

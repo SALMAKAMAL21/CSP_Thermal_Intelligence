@@ -26,9 +26,11 @@ from fastapi.responses import JSONResponse
 from PIL import Image
 from ultralytics import YOLO
 
+from .autoencoder_anomaly import analyze_ref_test_autoencoder, build_combined_anomaly, load_autoencoder_model
 from .thermal_anomaly import analyze_ref_test_thermal
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+AUTOENCODER_MODEL_PATH = PROJECT_ROOT / "src" / "models" / "best_autoencoder.pt"
 
 
 def resolve_model_path() -> Path:
@@ -63,6 +65,8 @@ app = FastAPI(
 
 # Variable globale pour le modele
 model = None
+autoencoder_model = None
+inference_device = "cpu"
 
 
 @dataclass
@@ -196,7 +200,7 @@ def _apply_tube_tracking(detections: list[dict], session_id: str | None, reset_t
 @app.on_event("startup")
 async def load_model():
     """Charge le modele au demarrage de l'API."""
-    global model
+    global model, autoencoder_model, inference_device
 
     if not MODEL_PATH.exists():
         print(f"[WARN] Modele non trouve : {MODEL_PATH}")
@@ -209,6 +213,7 @@ async def load_model():
         device = "mps"
     else:
         device = "cpu"
+    inference_device = device
 
     print(f"[API] Chargement du modele sur {device}...")
     model = YOLO(str(MODEL_PATH))
@@ -217,6 +222,16 @@ async def load_model():
     model.predict(dummy, device=device, verbose=False)
     print("[API] Modele pret.")
 
+    if AUTOENCODER_MODEL_PATH.exists():
+        try:
+            autoencoder_model = load_autoencoder_model(AUTOENCODER_MODEL_PATH, device=device)
+            print(f"[API] Autoencoder charge depuis {AUTOENCODER_MODEL_PATH.name}.")
+        except Exception as exc:
+            autoencoder_model = None
+            print(f"[WARN] Chargement autoencoder impossible: {exc}")
+    else:
+        print(f"[WARN] Autoencoder non trouve : {AUTOENCODER_MODEL_PATH}")
+
 
 @app.get("/health")
 async def health():
@@ -224,6 +239,7 @@ async def health():
     return {
         "status": "ok" if model is not None else "no_model",
         "model_loaded": model is not None,
+        "autoencoder_loaded": autoencoder_model is not None,
     }
 
 
@@ -237,6 +253,7 @@ async def model_info():
         "model": str(MODEL_PATH.name),
         "classes": model.names,
         "task": "segment",
+        "autoencoder_model": AUTOENCODER_MODEL_PATH.name if autoencoder_model is not None else None,
     }
 
 
@@ -265,12 +282,7 @@ async def predict(
     # Inference
     start = time.time()
 
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif torch.backends.mps.is_available():
-        device = "mps"
-    else:
-        device = "cpu"
+    device = inference_device
 
     results = model.predict(
         img_np,
@@ -333,11 +345,47 @@ async def predict(
             "reason": "thermal analysis not requested",
         }
 
+    if analyze_thermal:
+        try:
+            autoencoder_anomaly = analyze_ref_test_autoencoder(
+                img_np,
+                detections,
+                model=autoencoder_model,
+                device=device,
+            )
+        except Exception as exc:
+            autoencoder_anomaly = {
+                "status": "error",
+                "enabled": autoencoder_model is not None,
+                "error": str(exc),
+            }
+        try:
+            combined_anomaly = build_combined_anomaly(thermal_anomaly, autoencoder_anomaly)
+        except Exception as exc:
+            combined_anomaly = {
+                "status": "error",
+                "enabled": True,
+                "error": str(exc),
+            }
+    else:
+        autoencoder_anomaly = {
+            "status": "disabled",
+            "enabled": autoencoder_model is not None,
+            "reason": "autoencoder analysis not requested",
+        }
+        combined_anomaly = {
+            "status": "disabled",
+            "enabled": False,
+            "reason": "combined analysis not requested",
+        }
+
     return {
         "inference_time_ms": round(inference_time, 1),
         "image_size": {"width": img_np.shape[1], "height": img_np.shape[0]},
         "total_detections": len(detections),
         "hce_count": len(hce_detections),
         "thermal_anomaly": thermal_anomaly,
+        "autoencoder_anomaly": autoencoder_anomaly,
+        "combined_anomaly": combined_anomaly,
         "detections": detections,
     }

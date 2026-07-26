@@ -3,7 +3,7 @@ import { FiAlertTriangle, FiFilm, FiGrid, FiActivity } from "react-icons/fi";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { AiSummary } from "@/lib/thermal";
-import { formatAnomalyScore, formatTime, severityLabel } from "@/lib/thermal";
+import { confidenceLabel, formatAnomalyScore, formatTime, severityLabel, videoDecisionLabel } from "@/lib/thermal";
 
 type AnomalySectionProps = {
   aiSummary: AiSummary | null;
@@ -14,12 +14,14 @@ type AnomalySectionProps = {
 };
 
 export function AnomalySection({ aiSummary, hasAnomalyAnalysis, predictionCount, running, onAnalyze }: AnomalySectionProps) {
-  const severity = aiSummary?.peakSeverity ?? "none";
-  const anomalyLabel = hasAnomalyAnalysis && aiSummary ? severityLabel(aiSummary.peakSeverity) : "En attente";
-  const anomalyFrames = hasAnomalyAnalysis && aiSummary ? aiSummary.anomalyFrames.toString().padStart(2, "0") : "--";
+  const decision = aiSummary?.decision ?? "unknown";
+  const anomalyLabel = hasAnomalyAnalysis && aiSummary ? videoDecisionLabel(aiSummary.decision) : "En attente";
+  const anomalyFrames = hasAnomalyAnalysis && aiSummary ? aiSummary.warningFrameCount.toString().padStart(2, "0") : "--";
   const peakScore = hasAnomalyAnalysis && aiSummary ? formatAnomalyScore(aiSummary.maxAnomalyScore) : "--";
   const peakTime = hasAnomalyAnalysis && aiSummary ? formatTime(aiSummary.peakFrameTime) : "--";
-  const segments = hasAnomalyAnalysis && aiSummary ? aiSummary.suspectSegmentCount.toString().padStart(2, "0") : "--";
+  const segments = hasAnomalyAnalysis && aiSummary ? aiSummary.longestSuspectRun.toString().padStart(2, "0") : "--";
+  const confidence = hasAnomalyAnalysis && aiSummary ? confidenceLabel(aiSummary.decisionConfidence) : "--";
+  const aeRatio = hasAnomalyAnalysis && aiSummary ? aiSummary.autoencoderPeakRatio.toFixed(2) : "--";
 
   return (
     <section className="analysis-section" aria-labelledby="analysis-title">
@@ -36,12 +38,12 @@ export function AnomalySection({ aiSummary, hasAnomalyAnalysis, predictionCount,
 
       <div className="analysis-grid">
         <AnalysisCard
-          className={`severity-${severity}`}
+          className={`severity-${decision}`}
           icon={<FiAlertTriangle />}
           iconTone="danger"
           label={anomalyLabel}
           value={anomalyFrames}
-          description="Frames suspectes détectées"
+          description={`Confiance ${confidence}`}
         />
         <AnalysisCard
           icon={<FiFilm />}
@@ -52,9 +54,13 @@ export function AnomalySection({ aiSummary, hasAnomalyAnalysis, predictionCount,
         />
         <AnalysisCard
           icon={<FiGrid />}
-          label="Segments suspects"
+          label="Persistance"
           value={segments}
-          description="Zones thermiques retenues"
+          description={
+            hasAnomalyAnalysis && aiSummary
+              ? `${severityLabel(aiSummary.peakSeverity)} · AE ratio max ${aeRatio}`
+              : "Séquence suspecte continue"
+          }
         />
       </div>
     </section>

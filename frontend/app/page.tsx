@@ -16,51 +16,54 @@ export default function HomePage() {
     <main className="app-shell">
       <AppHeader />
 
-      <SourceVideoSection
-        error={csp.error}
-        fileInputRef={csp.fileInputRef}
-        outUrl={csp.outUrl}
-        predictionCount={csp.predictionCount}
-        progress={csp.progress}
-        running={csp.running}
-        step={csp.step}
-        videoFile={csp.videoFile}
-        onAnalyze={csp.handleSegmentationAction}
-        onFileChange={csp.handleVideoChange}
-      />
+      <div className="dashboard-grid">
+        <SourceVideoSection
+          error={csp.error}
+          fileInputRef={csp.fileInputRef}
+          outUrl={csp.outUrl}
+          predictionCount={csp.predictionCount}
+          progress={csp.progress}
+          running={csp.running}
+          step={csp.step}
+          videoFile={csp.videoFile}
+          onAnalyze={csp.handleSegmentationAction}
+          onFileChange={csp.handleVideoChange}
+        />
 
-      <SegmentationSection
-        aiSummary={csp.aiSummary}
-        backendStatus={csp.backendStatus}
-        canvasRef={csp.canvasRef}
-        outUrl={csp.outUrl}
-        running={csp.running}
-        videoPreviewUrl={csp.videoPreviewUrl}
-      />
+        <AnomalySection
+          aiSummary={csp.aiSummary}
+          hasAnomalyAnalysis={csp.hasAnomalyAnalysis}
+          predictionCount={csp.predictionCount}
+          running={csp.running}
+          onAnalyze={csp.handleAnomalyAnalysisAction}
+        />
 
-      <AnomalySection
-        aiSummary={csp.aiSummary}
-        hasAnomalyAnalysis={csp.hasAnomalyAnalysis}
-        predictionCount={csp.predictionCount}
-        running={csp.running}
-        onAnalyze={csp.handleAnomalyAnalysisAction}
-      />
+        <SegmentationSection
+          aiSummary={csp.aiSummary}
+          backendStatus={csp.backendStatus}
+          canvasRef={csp.canvasRef}
+          outUrl={csp.outUrl}
+          running={csp.running}
+          videoPreviewUrl={csp.videoPreviewUrl}
+        />
 
-      <TemperatureSection
-        refStats={csp.refStats}
-        testStats={csp.testStats}
-        tubeRefTemps={csp.tubeRefTemps}
-        tubeTestTemps={csp.tubeTestTemps}
-        onTemperatureChange={csp.updateTemperature}
-      />
+        <TemperatureSection
+          refStats={csp.refStats}
+          testStats={csp.testStats}
+          tubeRefTemps={csp.tubeRefTemps}
+          tubeTestTemps={csp.tubeTestTemps}
+          onAddTemperatureField={csp.addTemperatureField}
+          onTemperatureChange={csp.updateTemperature}
+        />
 
-      <ReportSection
-        canGenerateReport={csp.canGenerateReport}
-        generatingReport={csp.generatingReport}
-        reportStatus={csp.reportStatus}
-        reportUrl={csp.reportUrl}
-        onGenerate={csp.handleReportAction}
-      />
+        <ReportSection
+          canGenerateReport={csp.canGenerateReport}
+          generatingReport={csp.generatingReport}
+          reportStatus={csp.reportStatus}
+          reportUrl={csp.reportUrl}
+          onGenerate={csp.handleReportAction}
+        />
+      </div>
 
       <SiteFooter />
 

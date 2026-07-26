@@ -4,11 +4,13 @@ import { BACKEND_URL, createBackendUrl, fetchBackend, readBackendJson } from "@/
 export const dynamic = "force-dynamic";
 
 type HealthPayload = {
+  autoencoder_loaded?: boolean;
   model_loaded?: boolean;
   status?: string;
 };
 
 type ModelInfoPayload = {
+  autoencoder_model?: string | null;
   classes?: unknown;
   model?: string;
   task?: string;
@@ -32,6 +34,7 @@ export async function GET() {
 
     const health = (await readBackendJson(healthRes)) as HealthPayload;
     const modelLoaded = Boolean(health.model_loaded);
+    const autoencoderLoaded = Boolean(health.autoencoder_loaded);
     let modelInfo: ModelInfoPayload = {};
 
     if (modelLoaded) {
@@ -41,9 +44,11 @@ export async function GET() {
 
     return NextResponse.json({
       reachable: true,
+      autoencoderLoaded,
       modelLoaded,
       backendUrl: BACKEND_URL,
       status: health.status ?? (modelLoaded ? "ok" : "no_model"),
+      autoencoderModel: modelInfo.autoencoder_model ?? null,
       model: modelInfo.model,
       task: modelInfo.task,
       classes: modelInfo.classes
@@ -59,6 +64,7 @@ export async function GET() {
     return NextResponse.json(
       {
         reachable: false,
+        autoencoderLoaded: false,
         modelLoaded: false,
         backendUrl: BACKEND_URL,
         details

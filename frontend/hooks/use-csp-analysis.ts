@@ -6,15 +6,20 @@ import {
   formatAnomalyScore,
   formatAverage,
   formatTime,
+  getTemperaturePointLabel,
   getTemperatureStats,
   INITIAL_BACKEND_STATUS,
   pickColor,
+  REQUIRED_TEMPERATURE_COUNT,
   REPORT_WAITING_STATUS,
+  confidenceLabel,
   severityLabel,
   summarizePredictions,
   TARGET_LABELS,
-  TEMPERATURE_POINTS,
+  videoDecisionLabel,
   type AiSummary,
+  type AutoencoderAnomaly,
+  type CombinedAnomaly,
   type BackendConnectionStatus,
   type Detection,
   type FramePrediction,
@@ -46,7 +51,8 @@ export function useCspAnalysis() {
 
   const refStats = useMemo(() => getTemperatureStats(tubeRefTemps), [tubeRefTemps]);
   const testStats = useMemo(() => getTemperatureStats(tubeTestTemps), [tubeTestTemps]);
-  const allTemperaturesReady = refStats.completed === 4 && testStats.completed === 4;
+  const allTemperaturesReady =
+    refStats.completed >= REQUIRED_TEMPERATURE_COUNT && testStats.completed >= REQUIRED_TEMPERATURE_COUNT;
   const canGenerateReport = !!outUrl && !!aiSummary && hasAnomalyAnalysis && allTemperaturesReady && !generatingReport;
 
   const refreshBackendStatus = useCallback(async () => {
@@ -119,13 +125,20 @@ export function useCspAnalysis() {
     setReportUrl(null);
   }
 
+  function addTemperatureField() {
+    setTubeRefTemps((current) => [...current, ""]);
+    setTubeTestTemps((current) => [...current, ""]);
+    setReportStatus(outUrl && aiSummary ? "Rapport à régénérer après ajout d'un champ thermique." : REPORT_WAITING_STATUS);
+    setReportUrl(null);
+  }
+
   async function predictFrame(
     blob: Blob,
     idx: number,
     includeAnomaly: boolean,
     sessionId: string,
     resetTracker: boolean
-  ): Promise<{ detections: Detection[]; anomaly: ThermalAnomaly | null }> {
+  ): Promise<{ detections: Detection[]; anomaly: ThermalAnomaly | null; autoencoder: AutoencoderAnomaly | null; combined: CombinedAnomaly | null }> {
     const fd = new FormData();
     fd.append("image", new File([blob], `frame-${idx}.jpg`, { type: "image/jpeg" }));
     fd.append("conf", "0.25");
@@ -148,7 +161,9 @@ export function useCspAnalysis() {
 
     return {
       detections: (data.detections || []).filter((d) => TARGET_LABELS.has((d.class_name || "").toLowerCase())),
-      anomaly: includeAnomaly ? data.thermal_anomaly || null : null
+      anomaly: includeAnomaly ? data.thermal_anomaly || null : null,
+      autoencoder: includeAnomaly ? data.autoencoder_anomaly || null : null,
+      combined: includeAnomaly ? data.combined_anomaly || null : null
     };
   }
 
@@ -157,19 +172,20 @@ export function useCspAnalysis() {
       const label = (det.class_name || "unknown").toLowerCase();
       const color = pickColor(label);
 
-      if (Array.isArray(det.mask_polygon) && det.mask_polygon.length > 2) {
-        ctx.beginPath();
-        det.mask_polygon.forEach((p, i) => {
-          if (i === 0) ctx.moveTo(p[0], p[1]);
-          else ctx.lineTo(p[0], p[1]);
-        });
-        ctx.closePath();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 3;
-        ctx.stroke();
-        ctx.fillStyle = `${color}24`;
-        ctx.fill();
-      } else if (Array.isArray(det.bbox) && det.bbox.length === 4) {
+      //if (Array.isArray(det.mask_polygon) && det.mask_polygon.length > 2) {
+      // ctx.beginPath();
+      //  det.mask_polygon.forEach((p, i) => {
+      //    if (i === 0) ctx.moveTo(p[0], p[1]);
+      //    else ctx.lineTo(p[0], p[1]);
+      //  });
+      //  ctx.closePath();
+      //  ctx.strokeStyle = color;
+      //  ctx.lineWidth = 3;
+      //  ctx.stroke();
+      //  ctx.fillStyle = `${color}24`;
+      //  ctx.fill();
+      //} 
+       if (Array.isArray(det.bbox) && det.bbox.length === 4) {
         const [x1, y1, x2, y2] = det.bbox;
         ctx.strokeStyle = color;
         ctx.lineWidth = 3;
@@ -276,7 +292,13 @@ export function useCspAnalysis() {
         if (!blob) continue;
 
         const frameResult = await predictFrame(blob, i + 1, includeAnomaly, sessionId, i === 0);
-        predictions.push({ t, detections: frameResult.detections, anomaly: frameResult.anomaly });
+        predictions.push({
+          t,
+          detections: frameResult.detections,
+          anomaly: frameResult.anomaly,
+          autoencoder: frameResult.autoencoder,
+          combined: frameResult.combined
+        });
         setPredictionCount(predictions.length);
         setStep(includeAnomaly ? "Segmentation + anomalies" : "Segmentation YOLO");
         setProgress(Math.round(((i + 1) / sampleTimes.length) * 55));
@@ -345,8 +367,8 @@ export function useCspAnalysis() {
       setReportStatus(
         includeAnomaly
           ? allTemperaturesReady
-            ? `Résultat AI disponible. Score anomalie max ${formatAnomalyScore(summary.maxAnomalyScore)}. Rapport PDF prêt à générer.`
-            : `Résultat AI disponible. Score anomalie max ${formatAnomalyScore(summary.maxAnomalyScore)}. Compléter les 8 températures pour générer le rapport PDF.`
+            ? `Décision vidéo ${videoDecisionLabel(summary.decision)}. Score max ${formatAnomalyScore(summary.maxAnomalyScore)}, persistance ${summary.longestSuspectRun} frame(s). Rapport PDF prêt à générer.`
+            : `Décision vidéo ${videoDecisionLabel(summary.decision)}. Score max ${formatAnomalyScore(summary.maxAnomalyScore)}, persistance ${summary.longestSuspectRun} frame(s). Compléter les 8 températures pour générer le rapport PDF.`
           : allTemperaturesReady
             ? "Segmentation terminée. Lancez l'analyse pour calculer les anomalies, puis générez le rapport PDF."
             : "Segmentation terminée. Lancez l'analyse puis complétez les 8 températures pour générer le rapport PDF."
@@ -409,6 +431,40 @@ export function useCspAnalysis() {
         doc.text(value, x + 4, y + 16);
       };
 
+      const buildInterpretation = () => {
+        const decisionText =
+          aiSummary.decision === "anomaly"
+            ? "La vidéo présente une anomalie probable sur le tube test."
+            : aiSummary.decision === "warning"
+              ? "La vidéo présente un comportement atypique à surveiller sur le tube test."
+              : "La vidéo reste globalement compatible avec un comportement normal du tube test.";
+
+        const thermalText =
+          aiSummary.maxAnomalyScore >= 0.42
+            ? `La comparaison thermique a relevé un écart marqué entre tube_ref et tube_test, avec un score maximal de ${formatAnomalyScore(aiSummary.maxAnomalyScore)} et une persistance de ${aiSummary.longestSuspectRun} frame(s).`
+            : aiSummary.maxAnomalyScore >= 0.26
+              ? `La comparaison thermique a détecté un écart modéré entre tube_ref et tube_test, avec un score maximal de ${formatAnomalyScore(aiSummary.maxAnomalyScore)}.`
+              : `La comparaison thermique n'a pas mis en évidence d'écart fort entre tube_ref et tube_test, le score maximal restant à ${formatAnomalyScore(aiSummary.maxAnomalyScore)}.`;
+
+        const autoencoderText =
+          aiSummary.autoencoderPeakRatio >= 1.25
+            ? `L'autoencoder renforce l'hypothèse d'anomalie: le tube test apparaît significativement plus atypique que le tube de référence (ratio maximal ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}).`
+            : aiSummary.autoencoderPeakRatio >= 1.1
+              ? `L'autoencoder apporte un signal complémentaire modéré: le tube test est légèrement plus atypique que le tube de référence (ratio maximal ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}).`
+              : `L'autoencoder n'apporte pas de confirmation forte: le tube test reste proche du tube de référence du point de vue reconstruction (ratio maximal ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}).`;
+
+        const synthesisText =
+          aiSummary.decision === "anomaly" && aiSummary.autoencoderPeakRatio >= 1.1
+            ? "La convergence entre comparaison thermique et autoencoder renforce la crédibilité de la détection."
+            : aiSummary.decision === "anomaly"
+              ? "L'alerte est principalement portée par la comparaison thermique; une vérification visuelle des frames au pic est recommandée."
+              : aiSummary.decision === "warning"
+                ? "Le résultat doit être interprété comme une alerte prudente, utile pour orienter une inspection manuelle ciblée."
+                : "L'absence de convergence forte entre les indicateurs est cohérente avec une vidéo normale ou faiblement contrastée.";
+
+        return [decisionText, thermalText, autoencoderText, synthesisText];
+      };
+
       doc.setFillColor(8, 8, 10);
       doc.rect(0, 0, 210, 52, "F");
       doc.setTextColor(...accent);
@@ -434,17 +490,33 @@ export function useCspAnalysis() {
       metric("Tube test", `${aiSummary.tubeTestFrames}`, 16, 124);
 
       sectionTitle("Détection d'anomalies", 162);
-      metric("Sévérité", severityLabel(aiSummary.peakSeverity), 16, 176, 58);
+      metric("Décision", videoDecisionLabel(aiSummary.decision), 16, 176, 58);
       metric("Score max", formatAnomalyScore(aiSummary.maxAnomalyScore), 81, 176, 50);
       metric("Score moyen", formatAnomalyScore(aiSummary.averageAnomalyScore), 138, 176, 56);
-      metric("Frames suspectes", `${aiSummary.anomalyFrames}`, 16, 204, 58);
+      metric("Frames suspectes", `${aiSummary.warningFrameCount}`, 16, 204, 58);
       metric("Pic temporel", formatTime(aiSummary.peakFrameTime), 81, 204, 50);
-      metric("Segments", `${aiSummary.suspectSegmentCount}`, 138, 204, 56);
+      metric("Confiance", confidenceLabel(aiSummary.decisionConfidence), 138, 204, 56);
+
+      doc.setTextColor(...muted);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.text(
+        `Sévérité pic: ${severityLabel(aiSummary.peakSeverity)} · Ratio suspect: ${(aiSummary.suspectFrameRatio * 100).toFixed(1)}% · Persistance max: ${aiSummary.longestSuspectRun} frame(s)`,
+        16,
+        233,
+        { maxWidth: 178 }
+      );
+      doc.text(
+        `Support autoencoder: ${aiSummary.autoencoderSupportFrames} frames · Delta moyen AE: ${formatAnomalyScore(aiSummary.autoencoderAverageDelta)} · Ratio max AE: ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}`,
+        16,
+        238,
+        { maxWidth: 178 }
+      );
 
       sectionTitle("Températures relevées", 242);
       const rows = [
-        { label: "Tube Référence", values: tubeRefTemps, average: refStats.average },
-        { label: "Tube Test", values: tubeTestTemps, average: testStats.average }
+        { label: "tube-ref", values: tubeRefTemps, average: refStats.average },
+        { label: "tube-test", values: tubeTestTemps, average: testStats.average }
       ];
 
       let y = 256;
@@ -459,10 +531,12 @@ export function useCspAnalysis() {
         doc.setTextColor(...muted);
         doc.setFont("helvetica", "normal");
         doc.text(`Moyenne: ${formatAverage(row.average)}`, 142, y + 8);
-        row.values.forEach((value, index) => {
-          doc.text(`${TEMPERATURE_POINTS[index]}: ${value || "--"} °C`, 22 + index * 40, y + 16);
-        });
-        y += 26;
+        const labels = row.values.map((_, index) => `${getTemperaturePointLabel(index)}: ${row.values[index] || "--"} °C`);
+        const lineA = labels.filter((_, index) => index % 2 === 0).join("    ");
+        const lineB = labels.filter((_, index) => index % 2 === 1).join("    ");
+        doc.text(lineA, 22, y + 16, { maxWidth: 150 });
+        if (lineB) doc.text(lineB, 22, y + 22, { maxWidth: 150 });
+        y += lineB ? 32 : 26;
       });
 
       doc.setFillColor(246, 246, 247);
@@ -474,6 +548,50 @@ export function useCspAnalysis() {
         "Rapport généré localement à partir des résultats IA disponibles et des températures saisies.",
         22,
         y + 13,
+        { maxWidth: 166 }
+      );
+
+      doc.addPage();
+      sectionTitle("Interprétation Finale", 24);
+      doc.setTextColor(...text);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(12);
+      doc.text("Lecture des indicateurs", 16, 40);
+      doc.setTextColor(...muted);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.text(
+        "La comparaison thermique mesure l'écart relatif entre tube_ref (référence saine) et tube_test. L'autoencoder mesure à quel point le tube test s'écarte d'un comportement visuel/thermique appris comme normal.",
+        16,
+        50,
+        { maxWidth: 178 }
+      );
+
+      const interpretation = buildInterpretation();
+      let interpretationY = 74;
+      interpretation.forEach((paragraph) => {
+        const lines = doc.splitTextToSize(paragraph, 174);
+        doc.setTextColor(...text);
+        doc.text(lines, 20, interpretationY);
+        interpretationY += lines.length * 6 + 6;
+      });
+
+      doc.setDrawColor(...border);
+      doc.setFillColor(250, 250, 251);
+      doc.roundedRect(16, interpretationY + 2, 178, 30, 3, 3, "FD");
+      doc.setTextColor(...muted);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.text("Recommandation opérationnelle", 22, interpretationY + 12);
+      doc.setFont("helvetica", "normal");
+      doc.text(
+        aiSummary.decision === "anomaly"
+          ? "Inspecter prioritairement les frames autour du pic temporel et confronter la détection aux observations terrain."
+          : aiSummary.decision === "warning"
+            ? "Contrôler visuellement les frames signalées et confirmer l'écart thermique avant de conclure à une anomalie."
+            : "Aucune anomalie forte n'est confirmée; conserver la vidéo comme référence normale si l'inspection terrain confirme l'état sain.",
+        22,
+        interpretationY + 20,
         { maxWidth: 166 }
       );
 
@@ -546,6 +664,7 @@ export function useCspAnalysis() {
     testStats,
     tubeRefTemps,
     tubeTestTemps,
+    addTemperatureField,
     updateTemperature,
     videoFile,
     videoPreviewUrl

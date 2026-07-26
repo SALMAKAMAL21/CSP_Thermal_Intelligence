@@ -1,7 +1,13 @@
+import Image from "next/image";
+import logoImage from "../../logo/image.png";
+
 export function SiteFooter() {
   return (
     <footer className="site-footer">
-      <span>© 2026 Green Energy Park. Tous droits réservés.</span>
+      <div className="footer-center">
+        <Image className="footer-logo" src={logoImage} alt="Green Energy Park" />
+        <span>© Copyright Green Energy Park. Tous droits réservés 2026.</span>
+      </div>
     </footer>
   );
 }

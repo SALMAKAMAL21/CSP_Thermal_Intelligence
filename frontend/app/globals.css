@@ -179,8 +179,31 @@ h3 {
 
 .brand-block {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
+  gap: 14px;
   text-decoration: none;
+}
+
+.brand-copy {
+  display: grid;
+  gap: 4px;
+  max-width: 360px;
+  padding-top: 2px;
+}
+
+.brand-copy strong {
+  color: var(--heading);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.brand-copy span {
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .theme-toggle {
@@ -871,6 +894,12 @@ h3 {
   padding-bottom: 24px;
 }
 
+.tube-header-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
 .tube-card-header h3 {
   font-size: 24px;
   font-weight: 600;
@@ -938,6 +967,26 @@ h3 {
 .measure-input input::placeholder {
   color: var(--text);
   opacity: 0.62;
+}
+
+.temperature-add-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.temperature-add-shared {
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.temperature-add-shared svg {
+  width: 16px;
+  height: 16px;
 }
 
 .report-section {
@@ -1378,6 +1427,11 @@ h3 {
     gap: 16px;
   }
 
+  .tube-header-actions {
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
   .measure-grid {
     gap: 18px;
   }
@@ -1452,5 +1506,744 @@ h3 {
     max-width: min(330px, calc(100vw - 60px));
     margin-right: auto;
     margin-left: 0;
+  }
+}
+
+/* Compact premium dashboard overrides */
+
+.app-shell {
+  max-width: 1720px;
+  padding-top: 28px;
+}
+
+.topbar {
+  margin-bottom: 24px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(420px, 0.98fr);
+  grid-template-areas:
+    "source analysis"
+    "segmentation temperature"
+    "segmentation report";
+  align-items: stretch;
+  gap: 24px;
+}
+
+.source-section {
+  grid-area: source;
+}
+
+.analysis-section {
+  grid-area: analysis;
+}
+
+.segmentation-section {
+  grid-area: segmentation;
+}
+
+.temperature-section {
+  grid-area: temperature;
+}
+
+.report-section {
+  grid-area: report;
+}
+
+.source-section,
+.segmentation-section,
+.analysis-section,
+.temperature-section,
+.report-section {
+  max-width: none;
+  margin: 0;
+  height: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-self: stretch;
+  padding: 24px;
+  border: 1px solid var(--border-soft);
+  border-radius: 32px;
+  background:
+    radial-gradient(circle at top right, rgba(118, 184, 42, 0.08), transparent 34%),
+    linear-gradient(180deg, var(--glass-surface-strong), var(--glass-surface));
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-soft);
+}
+
+.source-section,
+.segmentation-section,
+.analysis-section,
+.temperature-section,
+.report-section {
+  gap: 16px;
+  padding-bottom: 24px;
+}
+
+.source-section {
+  align-items: stretch;
+}
+
+.section-copy {
+  gap: 6px;
+}
+
+.section-copy.is-centered {
+  justify-items: start;
+  text-align: left;
+}
+
+.section-copy p {
+  max-width: 720px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.source-section .section-copy h1,
+.source-section .section-copy h2,
+.segmentation-section .section-toolbar h2,
+.analysis-section .section-copy h2,
+.temperature-section .section-copy h2,
+.report-section .report-copy h2 {
+  font-size: 28px;
+  letter-spacing: -0.03em;
+}
+
+.upload-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  max-width: none;
+  gap: 14px;
+}
+
+.upload-zone {
+  min-height: 170px;
+  border-radius: 28px;
+  padding: 28px 26px;
+}
+
+.upload-icon {
+  width: 54px;
+  height: 54px;
+  margin-bottom: 16px;
+}
+
+.upload-title {
+  max-width: 720px;
+  font-size: 22px;
+}
+
+.upload-detail {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.workflow-action {
+  min-height: 46px;
+  border-radius: 14px;
+  padding-right: 20px;
+  padding-left: 20px;
+  font-size: 14px;
+}
+
+.segmentation-action {
+  margin-top: 0;
+}
+
+.section-action-row {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.progress-stack,
+.error-message {
+  max-width: none;
+  margin-top: 0;
+}
+
+.progress-stack {
+  border-radius: 22px;
+  padding: 14px 16px;
+}
+
+.section-toolbar {
+  gap: 16px;
+}
+
+.chip-row {
+  gap: 8px;
+}
+
+.video-stage {
+  border-radius: 26px;
+}
+
+.analysis-grid {
+  flex: 1 1 auto;
+  align-content: start;
+  gap: 14px;
+}
+
+.analysis-card {
+  min-height: 148px;
+  gap: 10px;
+  border-radius: 24px;
+  padding: 18px;
+}
+
+.analysis-card strong {
+  margin-top: 4px;
+  font-size: 42px;
+}
+
+.analysis-card p {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.tube-temperature-list {
+  flex: 1 1 auto;
+  align-content: start;
+  gap: 12px;
+}
+
+.tube-card {
+  gap: 20px;
+  border-radius: 24px;
+  padding: 18px;
+}
+
+.tube-card-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding-bottom: 16px;
+}
+
+.tube-card-header h3 {
+  font-size: 17px;
+  line-height: 1.15;
+}
+
+.tube-average strong {
+  font-size: 18px;
+}
+
+.measure-grid {
+  gap: 10px;
+}
+
+.measure-input input {
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.report-card {
+  gap: 28px;
+  border-radius: 24px;
+  padding: 24px;
+  background: linear-gradient(145deg, var(--surface-high), var(--surface-low));
+}
+
+.report-copy {
+  gap: 14px;
+}
+
+.report-copy p {
+  max-width: 460px;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.report-actions {
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.report-visual {
+  width: 220px;
+  height: 280px;
+  border-radius: 28px;
+}
+
+.report-visual::before {
+  height: 76px;
+  border-radius: 28px 28px 0 0;
+}
+
+.report-visual::after {
+  width: 220px;
+  height: 280px;
+  border-radius: 28px;
+}
+
+.summary-box,
+.output-panel {
+  border-radius: 20px;
+  padding: 16px 18px;
+}
+
+.pdf-preview-panel {
+  padding: 18px;
+}
+
+.pdf-preview {
+  min-height: 480px;
+}
+
+.site-footer {
+  margin: 24px 0 0;
+  padding: 28px 0 36px;
+  background: transparent;
+}
+
+@media (max-width: 1180px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "source"
+      "analysis"
+      "segmentation"
+      "temperature"
+      "report";
+  }
+
+  .segmentation-section {
+    position: static;
+  }
+
+  .analysis-grid,
+  .tube-temperature-list,
+  .report-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    padding-top: 22px;
+  }
+
+  .topbar {
+    margin-bottom: 18px;
+  }
+
+  .brand-block {
+    gap: 10px;
+  }
+
+  .brand-copy {
+    max-width: 220px;
+  }
+
+  .brand-copy strong {
+    font-size: 11px;
+  }
+
+  .brand-copy span {
+    font-size: 12px;
+  }
+
+  .dashboard-grid {
+    gap: 18px;
+  }
+
+  .source-section,
+  .segmentation-section,
+  .analysis-section,
+  .temperature-section,
+  .report-section {
+    padding: 18px;
+    border-radius: 24px;
+  }
+
+  .section-copy.is-centered {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .analysis-grid,
+  .tube-temperature-list {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-card {
+    min-height: 136px;
+  }
+
+  .analysis-card strong {
+    font-size: 38px;
+  }
+
+  .report-visual {
+    width: 180px;
+    height: 228px;
+  }
+
+  .report-visual::after {
+    width: 180px;
+    height: 228px;
+  }
+
+  .pdf-preview {
+    min-height: 420px;
+  }
+}
+
+/* Premium card treatment overrides */
+
+.source-section,
+.segmentation-section,
+.analysis-section,
+.temperature-section,
+.report-section {
+  position: relative;
+  overflow: hidden;
+}
+
+.source-section::before,
+.segmentation-section::before,
+.analysis-section::before,
+.temperature-section::before,
+.report-section::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), transparent 18%),
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.08), transparent 26%);
+  pointer-events: none;
+}
+
+.source-section > *,
+.segmentation-section > *,
+.analysis-section > *,
+.temperature-section > *,
+.report-section > * {
+  position: relative;
+  z-index: 1;
+}
+
+.section-copy h1,
+.section-copy h2,
+.section-toolbar h2,
+.report-copy h2 {
+  font-weight: 720;
+}
+
+.section-copy p {
+  color: color-mix(in srgb, var(--text-soft) 88%, white 12%);
+}
+
+.upload-zone,
+.analysis-card,
+.tube-card,
+.report-card,
+.summary-box,
+.output-panel,
+.progress-stack {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.45) inset,
+    0 20px 44px rgba(15, 23, 21, 0.08);
+}
+
+.upload-zone {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.68)),
+    radial-gradient(circle at top, rgba(118, 184, 42, 0.1), transparent 36%);
+}
+
+.dark .upload-zone {
+  background:
+    linear-gradient(180deg, rgba(30, 37, 33, 0.96), rgba(24, 31, 28, 0.84)),
+    radial-gradient(circle at top, rgba(155, 211, 93, 0.12), transparent 36%);
+}
+
+.upload-title {
+  letter-spacing: -0.03em;
+}
+
+.upload-detail {
+  color: color-mix(in srgb, var(--text-soft) 82%, white 18%);
+}
+
+.workflow-action {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.14) inset,
+    0 10px 30px rgba(10, 18, 12, 0.18);
+}
+
+.section-toolbar h2 {
+  letter-spacing: -0.03em;
+}
+
+.ui-badge {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 6px 18px rgba(15, 23, 21, 0.06);
+}
+
+.video-stage {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.video-stage::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 26%),
+    radial-gradient(circle at bottom right, rgba(118, 184, 42, 0.16), transparent 24%);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.analysis-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.72)),
+    radial-gradient(circle at top right, rgba(118, 184, 42, 0.08), transparent 32%);
+  border-color: rgba(0, 0, 0, 0.04);
+}
+
+.dark .analysis-card {
+  background:
+    linear-gradient(180deg, rgba(27, 34, 30, 0.96), rgba(22, 28, 25, 0.84)),
+    radial-gradient(circle at top right, rgba(155, 211, 93, 0.1), transparent 34%);
+}
+
+.analysis-card-top > span:last-child,
+.tube-average span,
+.measure-input span,
+.report-copy p,
+.footer-kicker {
+  letter-spacing: 0.08em;
+}
+
+.analysis-card strong {
+  letter-spacing: -0.05em;
+}
+
+.analysis-card p {
+  color: color-mix(in srgb, var(--text-soft) 88%, white 12%);
+}
+
+.analysis-card.severity-anomaly,
+.analysis-card.severity-high {
+  background:
+    linear-gradient(180deg, rgba(255, 247, 246, 0.96), rgba(255, 240, 238, 0.8)),
+    radial-gradient(circle at top right, rgba(186, 26, 26, 0.12), transparent 36%);
+}
+
+.dark .analysis-card.severity-anomaly,
+.dark .analysis-card.severity-high {
+  background:
+    linear-gradient(180deg, rgba(44, 25, 23, 0.92), rgba(30, 20, 19, 0.82)),
+    radial-gradient(circle at top right, rgba(255, 180, 171, 0.15), transparent 36%);
+}
+
+.tube-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.72)),
+    radial-gradient(circle at top left, rgba(118, 184, 42, 0.08), transparent 30%);
+}
+
+.dark .tube-card {
+  background:
+    linear-gradient(180deg, rgba(26, 33, 30, 0.96), rgba(22, 29, 27, 0.84)),
+    radial-gradient(circle at top left, rgba(155, 211, 93, 0.08), transparent 30%);
+}
+
+.tube-card.test-card {
+  background:
+    linear-gradient(180deg, rgba(255, 250, 249, 0.92), rgba(255, 245, 244, 0.78)),
+    radial-gradient(circle at top left, rgba(186, 26, 26, 0.08), transparent 34%);
+}
+
+.dark .tube-card.test-card {
+  background:
+    linear-gradient(180deg, rgba(38, 25, 24, 0.94), rgba(28, 21, 21, 0.84)),
+    radial-gradient(circle at top left, rgba(255, 180, 171, 0.1), transparent 34%);
+}
+
+.measure-input .ui-input {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 18px rgba(15, 23, 21, 0.05) inset;
+}
+
+.report-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.42) inset,
+    0 24px 60px rgba(15, 23, 21, 0.08);
+}
+
+.report-copy h2 {
+  letter-spacing: -0.04em;
+}
+
+.report-visual {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.28) inset,
+    0 30px 60px rgba(0, 0, 0, 0.22);
+}
+
+.summary-box {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.7)),
+    radial-gradient(circle at top right, rgba(118, 184, 42, 0.06), transparent 30%);
+}
+
+.pdf-preview-panel {
+  background:
+    linear-gradient(180deg, rgba(16, 21, 20, 0.98), rgba(10, 14, 13, 0.96)),
+    radial-gradient(circle at top right, rgba(118, 184, 42, 0.14), transparent 24%);
+}
+
+.site-footer {
+  display: flex;
+  justify-content: center;
+  padding: 18px 0 34px;
+  background: transparent;
+}
+
+.footer-center {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 56px;
+  padding: 12px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background:
+    linear-gradient(145deg, #0f1513, #161f1b),
+    radial-gradient(circle at top right, rgba(118, 184, 42, 0.18), transparent 28%);
+  color: rgba(241, 244, 242, 0.82);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 16px 32px rgba(0, 0, 0, 0.18);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.footer-logo {
+  width: 28px;
+  height: auto;
+  object-fit: contain;
+}
+
+@media (max-width: 760px) {
+  .site-footer {
+    padding-bottom: 28px;
+  }
+
+  .footer-center {
+    width: 100%;
+    max-width: 100%;
+    padding: 14px 16px;
+    border-radius: 24px;
+    white-space: normal;
+    line-height: 1.5;
+  }
+}
+
+/* Sharper premium radius overrides */
+
+:root {
+  --radius-card: 18px;
+  --radius-large: 24px;
+}
+
+.source-section,
+.segmentation-section,
+.analysis-section,
+.temperature-section,
+.report-section {
+  border-radius: 24px;
+}
+
+.upload-zone,
+.video-stage,
+.analysis-card,
+.tube-card,
+.report-card,
+.summary-box,
+.output-panel,
+.progress-stack {
+  border-radius: 16px;
+}
+
+.ui-button {
+  border-radius: 12px;
+}
+
+.workflow-action {
+  border-radius: 12px;
+}
+
+.ui-input,
+.measure-input input {
+  border-radius: 12px;
+}
+
+.ui-badge,
+.chip-row > span:not(.ui-badge) {
+  border-radius: 10px;
+}
+
+.report-visual,
+.report-visual::after {
+  border-radius: 20px;
+}
+
+.report-visual::before {
+  border-radius: 20px 20px 0 0;
+}
+
+.pdf-viewer-shell {
+  border-radius: 14px;
+}
+
+.footer-center {
+  border-radius: 16px;
+}
+
+@media (max-width: 760px) {
+  .source-section,
+  .segmentation-section,
+  .analysis-section,
+  .temperature-section,
+  .report-section {
+    border-radius: 18px;
+  }
+
+  .upload-zone,
+  .video-stage,
+  .analysis-card,
+  .tube-card,
+  .report-card,
+  .summary-box,
+  .output-panel,
+  .progress-stack,
+  .footer-center {
+    border-radius: 14px;
+  }
+
+  .ui-button,
+  .workflow-action,
+  .ui-input,
+  .measure-input input,
+  .ui-badge,
+  .chip-row > span:not(.ui-badge) {
+    border-radius: 10px;
   }
 }

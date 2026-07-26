@@ -2,7 +2,7 @@ import type { RefObject } from "react";
 import { FiCpu, FiDownload } from "react-icons/fi";
 import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
-import type { AiSummary, BackendConnectionStatus } from "@/lib/thermal";
+import { videoDecisionLabel, type AiSummary, type BackendConnectionStatus } from "@/lib/thermal";
 
 type SegmentationSectionProps = {
   aiSummary: AiSummary | null;
@@ -14,7 +14,7 @@ type SegmentationSectionProps = {
 };
 
 export function SegmentationSection({
-  aiSummary: _aiSummary,
+  aiSummary,
   backendStatus,
   canvasRef,
   outUrl,
@@ -45,6 +45,14 @@ export function SegmentationSection({
               <FiCpu aria-hidden="true" />
               {status}
             </Badge>
+            <Badge variant={backendStatus.autoencoderLoaded ? "live" : "danger"}>
+              AE {backendStatus.autoencoderLoaded ? "chargé" : "absent"}
+            </Badge>
+            {aiSummary && (
+              <Badge variant={aiSummary.decision === "anomaly" ? "danger" : "live"}>
+                {videoDecisionLabel(aiSummary.decision)}
+              </Badge>
+            )}
           </div>
         </div>
         {outUrl ? (
