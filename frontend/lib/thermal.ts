@@ -41,6 +41,20 @@ export type AutoencoderAnomaly = {
   error?: string;
 };
 
+export type SiameseAnomaly = {
+  status?: string;
+  enabled?: boolean;
+  source?: string;
+  pair_probability?: number;
+  embedding_distance?: number;
+  support_score?: number;
+  decision?: VideoDecision;
+  confidence?: VideoDecisionConfidence;
+  input_size?: number;
+  reason?: string;
+  error?: string;
+};
+
 export type CombinedAnomaly = {
   status?: string;
   enabled?: boolean;
@@ -50,6 +64,7 @@ export type CombinedAnomaly = {
   confidence?: VideoDecisionConfidence;
   thermal_score?: number;
   autoencoder_support?: number;
+  siamese_support?: number;
   note?: string;
   error?: string;
 };
@@ -58,6 +73,7 @@ export type PredictResponse = {
   detections?: Detection[];
   thermal_anomaly?: ThermalAnomaly;
   autoencoder_anomaly?: AutoencoderAnomaly;
+  siamese_anomaly?: SiameseAnomaly;
   combined_anomaly?: CombinedAnomaly;
   error?: string;
   details?: string;
@@ -75,6 +91,8 @@ export type BackendConnectionStatus = {
   model?: string;
   modelLoaded: boolean;
   reachable: boolean;
+  siameseLoaded?: boolean;
+  siameseModel?: string | null;
   status?: string;
   task?: string;
 };
@@ -84,6 +102,7 @@ export type FramePrediction = {
   detections: Detection[];
   anomaly: ThermalAnomaly | null;
   autoencoder: AutoencoderAnomaly | null;
+  siamese: SiameseAnomaly | null;
   combined: CombinedAnomaly | null;
 };
 
@@ -111,11 +130,20 @@ export type AiSummary = {
   autoencoderSupportFrames: number;
   autoencoderPeakRatio: number;
   autoencoderAverageDelta: number;
+  siameseSupportFrames: number;
+  siamesePeakProbability: number;
 };
 
 export type TemperatureStats = {
   average: number | null;
   completed: number;
+};
+
+export type TemperatureDeltaInterpretation = {
+  delta: number | null;
+  level: number | null;
+  label: string;
+  description: string;
 };
 
 export const TARGET_LABELS = new Set(["tube_ref", "tube_test", "tube", "hce"]);
@@ -128,7 +156,8 @@ export const INITIAL_BACKEND_STATUS: BackendConnectionStatus = {
   autoencoderLoaded: false,
   checking: true,
   modelLoaded: false,
-  reachable: false
+  reachable: false,
+  siameseLoaded: false
 };
 
 export const createRefTemperatures = () => Array.from({ length: REQUIRED_TEMPERATURE_COUNT }, () => "");
@@ -173,6 +202,66 @@ export function getTemperatureStats(values: string[]): TemperatureStats {
 
 export function formatAverage(value: number | null) {
   return value === null ? "-- °C" : `${value.toFixed(1)} °C`;
+}
+
+export function getTemperatureDeltaInterpretation(
+  refAverage: number | null,
+  testAverage: number | null,
+): TemperatureDeltaInterpretation {
+  if (refAverage === null || testAverage === null) {
+    return {
+      delta: null,
+      level: null,
+      label: "Interprétation indisponible",
+      description: "Les moyennes tube-ref et tube-test sont nécessaires pour interpréter l'écart thermique.",
+    };
+  }
+
+  // The magnitude of the thermal gap matters here, regardless of sensor order.
+  const delta = Math.abs(testAverage - refAverage);
+
+  if (delta < 10) {
+    return {
+      delta,
+      level: 0,
+      label: "Normal",
+      description: "Le tube test reste compatible avec un sous-vide normal, avec un écart thermique proche du comportement attendu.",
+    };
+  }
+
+  if (delta < 18) {
+    return {
+      delta,
+      level: 1,
+      label: "Faible perte de vide",
+      description: "L'écart thermique suggère une quantité minimale d'air dans le tube test et un début de dégradation du vide.",
+    };
+  }
+
+  if (delta < 35) {
+    return {
+      delta,
+      level: 2,
+      label: "Perte de vide modérée",
+      description: "L'écart thermique indique une perte de vide déjà significative, cohérente avec un tube test partiellement dégradé.",
+    };
+  }
+
+  if (delta < 50) {
+    return {
+      delta,
+      level: 3,
+      label: "Perte importante de vide",
+      description: "L'écart thermique est élevé et traduit une perte importante du vide dans le tube test.",
+    };
+  }
+
+  return {
+    delta,
+    level: 4,
+    label: "Perte complète du vide",
+    description: "L'écart thermique est compatible avec une perte complète ou quasi complète du vide dans le tube test.",
+  };
 }
 
 export function getAnomalyScore(anomaly: ThermalAnomaly | null | undefined) {
@@ -294,6 +383,9 @@ export function summarizePredictions(predictions: FramePrediction[]): AiSummary 
       const autoencoderRatio = Number(frame.autoencoder?.score_ratio ?? 0);
       const autoencoderDelta = Number(frame.autoencoder?.score_delta ?? 0);
       const autoencoderSupport = autoencoderDecision === "warning" || autoencoderDecision === "anomaly";
+      const siameseDecision = (frame.siamese?.decision || "").toLowerCase();
+      const siameseProbability = Number(frame.siamese?.pair_probability ?? frame.siamese?.support_score ?? 0);
+      const siameseSupport = siameseDecision === "warning" || siameseDecision === "anomaly";
 
       return {
         sampledFrames: summary.sampledFrames + 1,
@@ -317,7 +409,9 @@ export function summarizePredictions(predictions: FramePrediction[]): AiSummary 
           : summary.decisionConfidence,
         autoencoderSupportFrames: summary.autoencoderSupportFrames + (autoencoderSupport ? 1 : 0),
         autoencoderPeakRatio: Math.max(summary.autoencoderPeakRatio, Number.isFinite(autoencoderRatio) ? autoencoderRatio : 0),
-        autoencoderAverageDelta: summary.autoencoderAverageDelta + (Number.isFinite(autoencoderDelta) ? autoencoderDelta : 0)
+        autoencoderAverageDelta: summary.autoencoderAverageDelta + (Number.isFinite(autoencoderDelta) ? autoencoderDelta : 0),
+        siameseSupportFrames: summary.siameseSupportFrames + (siameseSupport ? 1 : 0),
+        siamesePeakProbability: Math.max(summary.siamesePeakProbability, Number.isFinite(siameseProbability) ? siameseProbability : 0)
       };
     },
     {
@@ -340,7 +434,9 @@ export function summarizePredictions(predictions: FramePrediction[]): AiSummary 
       decisionConfidence: "low",
       autoencoderSupportFrames: 0,
       autoencoderPeakRatio: 0,
-      autoencoderAverageDelta: 0
+      autoencoderAverageDelta: 0,
+      siameseSupportFrames: 0,
+      siamesePeakProbability: 0
     }
   );
 
@@ -382,5 +478,60 @@ export function summarizePredictions(predictions: FramePrediction[]): AiSummary 
         )
       : summary.decisionConfidence,
     autoencoderAverageDelta: summary.sampledFrames ? summary.autoencoderAverageDelta / summary.sampledFrames : 0
+  };
+}
+
+export function buildAnomalyNarrative(summary: AiSummary | null, hasAnalysis: boolean) {
+  if (!hasAnalysis || !summary) {
+    return {
+      headline: "L’analyse n’a pas encore été lancée.",
+      overview: "Après la segmentation, lancez l’analyse pour obtenir une explication simple de l’état du tube test.",
+      details: [
+        "Le moteur thermique compare le tube test au tube de référence pour voir s’il chauffe différemment.",
+        "L’autoencoder vérifie si l’apparence du tube test reste proche d’un comportement normal appris.",
+        "Le modèle Siamese compare directement les deux tubes pour confirmer ou nuancer l’alerte.",
+      ],
+    };
+  }
+
+  const headline =
+    summary.decision === "anomaly"
+      ? "Le tube test présente une anomalie probable."
+      : summary.decision === "warning"
+        ? "Le tube test présente un comportement à surveiller."
+        : "Le tube test reste globalement compatible avec un état normal.";
+
+  const overview =
+    summary.decision === "anomaly"
+      ? "Plusieurs indices convergent vers un écart réel entre le tube test et le tube de référence."
+      : summary.decision === "warning"
+        ? "Le système détecte un écart mesurable, mais moins net qu’une anomalie forte."
+        : "Les modèles ne voient pas de divergence forte entre le tube test et le tube de référence.";
+
+  const thermalDetail =
+    summary.maxAnomalyScore >= 0.42
+      ? `Thermique: écart marqué détecté, avec un pic de ${formatAnomalyScore(summary.maxAnomalyScore)} et une persistance de ${summary.longestSuspectRun} frame(s).`
+      : summary.maxAnomalyScore >= 0.26
+        ? `Thermique: écart modéré détecté, avec un pic de ${formatAnomalyScore(summary.maxAnomalyScore)}.`
+        : `Thermique: pas d’écart fort détecté, le pic restant à ${formatAnomalyScore(summary.maxAnomalyScore)}.`;
+
+  const autoencoderDetail =
+    summary.autoencoderPeakRatio >= 1.25
+      ? `Autoencoder: confirme fortement l’écart visuel ou thermique du tube test (ratio max ${formatAnomalyScore(summary.autoencoderPeakRatio)}).`
+      : summary.autoencoderPeakRatio >= 1.1
+        ? `Autoencoder: apporte un soutien modéré à l’alerte (ratio max ${formatAnomalyScore(summary.autoencoderPeakRatio)}).`
+        : "Autoencoder: ne confirme pas fortement une différence anormale du tube test.";
+
+  const siameseDetail =
+    summary.siamesePeakProbability >= 0.6
+      ? `Siamese: estime une différence forte entre tube-ref et tube-test (probabilité max ${formatAnomalyScore(summary.siamesePeakProbability)}).`
+      : summary.siamesePeakProbability >= 0.35
+        ? `Siamese: observe une différence perceptible entre les deux tubes (probabilité max ${formatAnomalyScore(summary.siamesePeakProbability)}).`
+        : "Siamese: ne renforce pas fortement l’idée d’une différence anormale entre les deux tubes.";
+
+  return {
+    headline,
+    overview,
+    details: [thermalDetail, autoencoderDetail, siameseDetail],
   };
 }

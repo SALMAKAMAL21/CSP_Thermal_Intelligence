@@ -3,7 +3,7 @@ import { FiAlertTriangle, FiFilm, FiGrid, FiActivity } from "react-icons/fi";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { AiSummary } from "@/lib/thermal";
-import { confidenceLabel, formatAnomalyScore, formatTime, severityLabel, videoDecisionLabel } from "@/lib/thermal";
+import { buildAnomalyNarrative, confidenceLabel, formatAnomalyScore, formatTime, severityLabel, videoDecisionLabel } from "@/lib/thermal";
 
 type AnomalySectionProps = {
   aiSummary: AiSummary | null;
@@ -22,6 +22,7 @@ export function AnomalySection({ aiSummary, hasAnomalyAnalysis, predictionCount,
   const segments = hasAnomalyAnalysis && aiSummary ? aiSummary.longestSuspectRun.toString().padStart(2, "0") : "--";
   const confidence = hasAnomalyAnalysis && aiSummary ? confidenceLabel(aiSummary.decisionConfidence) : "--";
   const aeRatio = hasAnomalyAnalysis && aiSummary ? aiSummary.autoencoderPeakRatio.toFixed(2) : "--";
+  const narrative = buildAnomalyNarrative(aiSummary, hasAnomalyAnalysis);
 
   return (
     <section className="analysis-section" aria-labelledby="analysis-title">
@@ -63,6 +64,25 @@ export function AnomalySection({ aiSummary, hasAnomalyAnalysis, predictionCount,
           }
         />
       </div>
+
+      <Card className="analysis-explainer">
+        <div className="analysis-explainer-head">
+          <span className={`analysis-explainer-badge is-${decision}`}>{hasAnomalyAnalysis && aiSummary ? videoDecisionLabel(aiSummary.decision) : "Analyse guidée"}</span>
+          <span>Lecture simplifiée pour opérateurs terrain</span>
+        </div>
+        <div className="analysis-explainer-copy">
+          <h3>{narrative.headline}</h3>
+          <p>{narrative.overview}</p>
+        </div>
+        <div className="analysis-explainer-list">
+          {narrative.details.map((detail) => (
+            <div key={detail} className="analysis-explainer-item">
+              <span className="analysis-explainer-dot" aria-hidden="true" />
+              <p>{detail}</p>
+            </div>
+          ))}
+        </div>
+      </Card>
     </section>
   );
 }

@@ -866,6 +866,110 @@ h3 {
   line-height: 1.5;
 }
 
+.analysis-explainer {
+  display: grid;
+  gap: 18px;
+  border-radius: 26px;
+  padding: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(248, 249, 250, 0.94)),
+    radial-gradient(circle at top right, rgba(118, 184, 42, 0.08), transparent 38%);
+}
+
+.analysis-explainer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.analysis-explainer-head > span:last-child {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.analysis-explainer-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--surface-container);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.analysis-explainer-badge.is-anomaly {
+  color: #8e1c1c;
+  background: rgba(186, 26, 26, 0.12);
+}
+
+.analysis-explainer-badge.is-warning {
+  color: #7b4f00;
+  background: rgba(248, 132, 47, 0.16);
+}
+
+.analysis-explainer-badge.is-normal {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.analysis-explainer-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.analysis-explainer-copy h3 {
+  font-size: 22px;
+  line-height: 1.25;
+  letter-spacing: -0.03em;
+}
+
+.analysis-explainer-copy p {
+  color: var(--text-soft);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.analysis-explainer-list {
+  display: grid;
+  gap: 12px;
+}
+
+.analysis-explainer-item {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.analysis-explainer-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--primary-container), var(--primary));
+  box-shadow: 0 0 0 4px rgba(118, 184, 42, 0.12);
+}
+
+.analysis-explainer-item p {
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
 .temperature-section {
   display: grid;
   gap: 40px;
@@ -1704,6 +1808,21 @@ h3 {
 .analysis-card p {
   font-size: 13px;
   line-height: 1.4;
+}
+
+.analysis-explainer {
+  gap: 14px;
+  padding: 18px;
+  border-radius: 22px;
+}
+
+.analysis-explainer-copy h3 {
+  font-size: 19px;
+}
+
+.analysis-explainer-item {
+  padding: 11px 12px;
+  border-radius: 16px;
 }
 
 .tube-temperature-list {

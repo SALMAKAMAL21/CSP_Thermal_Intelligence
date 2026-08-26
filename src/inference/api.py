@@ -13,6 +13,7 @@ Endpoints:
 """
 
 import io
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -21,16 +22,18 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image
 from ultralytics import YOLO
 
 from .autoencoder_anomaly import analyze_ref_test_autoencoder, build_combined_anomaly, load_autoencoder_model
+from .siamese_anomaly import analyze_ref_test_siamese, build_combined_with_siamese, load_siamese_model
 from .thermal_anomaly import analyze_ref_test_thermal
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 AUTOENCODER_MODEL_PATH = PROJECT_ROOT / "src" / "models" / "best_autoencoder.pt"
+SIAMESE_MODEL_PATH = PROJECT_ROOT / "src" / "models" / "best_siamese.pt"
 
 
 def resolve_model_path() -> Path:
@@ -66,6 +69,8 @@ app = FastAPI(
 # Variable globale pour le modele
 model = None
 autoencoder_model = None
+siamese_model = None
+siamese_config = None
 inference_device = "cpu"
 
 
@@ -200,7 +205,7 @@ def _apply_tube_tracking(detections: list[dict], session_id: str | None, reset_t
 @app.on_event("startup")
 async def load_model():
     """Charge le modele au demarrage de l'API."""
-    global model, autoencoder_model, inference_device
+    global model, autoencoder_model, siamese_model, siamese_config, inference_device
 
     if not MODEL_PATH.exists():
         print(f"[WARN] Modele non trouve : {MODEL_PATH}")
@@ -232,6 +237,17 @@ async def load_model():
     else:
         print(f"[WARN] Autoencoder non trouve : {AUTOENCODER_MODEL_PATH}")
 
+    if SIAMESE_MODEL_PATH.exists():
+        try:
+            siamese_model, siamese_config = load_siamese_model(SIAMESE_MODEL_PATH, device=device)
+            print(f"[API] Siamese charge depuis {SIAMESE_MODEL_PATH.name}.")
+        except Exception as exc:
+            siamese_model = None
+            siamese_config = None
+            print(f"[WARN] Chargement siamese impossible: {exc}")
+    else:
+        print(f"[WARN] Siamese non trouve : {SIAMESE_MODEL_PATH}")
+
 
 @app.get("/health")
 async def health():
@@ -240,6 +256,7 @@ async def health():
         "status": "ok" if model is not None else "no_model",
         "model_loaded": model is not None,
         "autoencoder_loaded": autoencoder_model is not None,
+        "siamese_loaded": siamese_model is not None,
     }
 
 
@@ -254,6 +271,7 @@ async def model_info():
         "classes": model.names,
         "task": "segment",
         "autoencoder_model": AUTOENCODER_MODEL_PATH.name if autoencoder_model is not None else None,
+        "siamese_model": SIAMESE_MODEL_PATH.name if siamese_model is not None else None,
     }
 
 
@@ -274,52 +292,19 @@ async def predict(
     if model is None:
         return JSONResponse(status_code=503, content={"error": "Modele non charge"})
 
-    # Lire l'image
-    contents = await image.read()
-    img = Image.open(io.BytesIO(contents))
-    img_np = np.array(img)
+    img_np = await _read_upload_image(image)
 
     # Inference
     start = time.time()
 
     device = inference_device
 
-    results = model.predict(
-        img_np,
-        device=device,
-        conf=conf,
-        iou=iou,
-        imgsz=640,
-        verbose=False,
-    )
+    results = model.predict(img_np, device=device, conf=conf, iou=iou, imgsz=640, verbose=False)
     inference_time = (time.time() - start) * 1000
 
     result = results[0]
 
-    # Formater les resultats
-    detections = []
-    for i, box in enumerate(result.boxes):
-        detection = {
-            "class_id": int(box.cls[0]),
-            "class_name": model.names[int(box.cls[0])],
-            "confidence": round(float(box.conf[0]), 4),
-            "bbox": box.xyxy[0].cpu().numpy().tolist(),
-        }
-
-        # Ajouter le masque (en format RLE compact ou polygone)
-        if result.masks is not None and i < len(result.masks):
-            mask = result.masks.data[i].cpu().numpy()
-            # Convertir en contours pour un format compact
-            mask_uint8 = (mask * 255).astype(np.uint8)
-            mask_resized = cv2.resize(mask_uint8, (img_np.shape[1], img_np.shape[0]))
-            contours, _ = cv2.findContours(mask_resized, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                # Plus grand contour en liste de points
-                largest = max(contours, key=cv2.contourArea)
-                detection["mask_polygon"] = largest.reshape(-1, 2).tolist()
-                detection["mask_area"] = int(cv2.contourArea(largest))
-
-        detections.append(detection)
+    detections = _format_detections(result, model.names, img_np)
 
     # Post-regle metier: si on detecte des tubes, forcer la convention
     # tube_ref = tube le plus haut, tube_test = tube le plus bas.
@@ -330,48 +315,26 @@ async def predict(
     hce_detections = [d for d in detections if d["class_name"] in {"hce", "tube_ref", "tube_test", "tube"}]
 
     if analyze_thermal:
-        try:
-            thermal_anomaly = analyze_ref_test_thermal(img_np, detections)
-        except Exception as exc:
-            thermal_anomaly = {
-                "status": "error",
-                "enabled": True,
-                "error": str(exc),
-            }
+        thermal_anomaly, autoencoder_anomaly, siamese_anomaly, combined_anomaly = _analyze_with_existing_detections(
+            img_np,
+            detections,
+            device,
+        )
     else:
         thermal_anomaly = {
             "status": "disabled",
             "enabled": False,
             "reason": "thermal analysis not requested",
         }
-
-    if analyze_thermal:
-        try:
-            autoencoder_anomaly = analyze_ref_test_autoencoder(
-                img_np,
-                detections,
-                model=autoencoder_model,
-                device=device,
-            )
-        except Exception as exc:
-            autoencoder_anomaly = {
-                "status": "error",
-                "enabled": autoencoder_model is not None,
-                "error": str(exc),
-            }
-        try:
-            combined_anomaly = build_combined_anomaly(thermal_anomaly, autoencoder_anomaly)
-        except Exception as exc:
-            combined_anomaly = {
-                "status": "error",
-                "enabled": True,
-                "error": str(exc),
-            }
-    else:
         autoencoder_anomaly = {
             "status": "disabled",
             "enabled": autoencoder_model is not None,
             "reason": "autoencoder analysis not requested",
+        }
+        siamese_anomaly = {
+            "status": "disabled",
+            "enabled": siamese_model is not None,
+            "reason": "siamese analysis not requested",
         }
         combined_anomaly = {
             "status": "disabled",
@@ -386,6 +349,141 @@ async def predict(
         "hce_count": len(hce_detections),
         "thermal_anomaly": thermal_anomaly,
         "autoencoder_anomaly": autoencoder_anomaly,
+        "siamese_anomaly": siamese_anomaly,
         "combined_anomaly": combined_anomaly,
         "detections": detections,
     }
+
+
+@app.post("/analyze-anomaly")
+async def analyze_anomaly(
+    image: UploadFile = File(...),
+    detections_json: str = Form(...),
+):
+    if model is None:
+        return JSONResponse(status_code=503, content={"error": "Modele non charge"})
+
+    try:
+        detections = json.loads(detections_json)
+    except json.JSONDecodeError:
+        return JSONResponse(status_code=400, content={"error": "detections_json invalide"})
+
+    if not isinstance(detections, list):
+        return JSONResponse(status_code=400, content={"error": "detections_json doit etre une liste"})
+
+    img_np = await _read_upload_image(image)
+    start = time.time()
+    thermal_anomaly, autoencoder_anomaly, siamese_anomaly, combined_anomaly = _analyze_with_existing_detections(
+        img_np,
+        detections,
+        inference_device,
+    )
+    analysis_time_ms = (time.time() - start) * 1000
+
+    hce_detections = [d for d in detections if d.get("class_name") in {"hce", "tube_ref", "tube_test", "tube"}]
+
+    return {
+        "inference_time_ms": round(analysis_time_ms, 1),
+        "image_size": {"width": img_np.shape[1], "height": img_np.shape[0]},
+        "total_detections": len(detections),
+        "hce_count": len(hce_detections),
+        "thermal_anomaly": thermal_anomaly,
+        "autoencoder_anomaly": autoencoder_anomaly,
+        "siamese_anomaly": siamese_anomaly,
+        "combined_anomaly": combined_anomaly,
+        "detections": detections,
+    }
+
+
+async def _read_upload_image(image: UploadFile) -> np.ndarray:
+    contents = await image.read()
+    img = Image.open(io.BytesIO(contents))
+    return np.array(img)
+
+
+def _format_detections(result, model_names: dict[int, str], img_np: np.ndarray) -> list[dict]:
+    detections = []
+    for i, box in enumerate(result.boxes):
+        detection = {
+            "class_id": int(box.cls[0]),
+            "class_name": model_names[int(box.cls[0])],
+            "confidence": round(float(box.conf[0]), 4),
+            "bbox": box.xyxy[0].cpu().numpy().tolist(),
+        }
+
+        if result.masks is not None and i < len(result.masks):
+            mask = result.masks.data[i].cpu().numpy()
+            mask_uint8 = (mask * 255).astype(np.uint8)
+            mask_resized = cv2.resize(mask_uint8, (img_np.shape[1], img_np.shape[0]))
+            contours, _ = cv2.findContours(mask_resized, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                largest = max(contours, key=cv2.contourArea)
+                detection["mask_polygon"] = largest.reshape(-1, 2).tolist()
+                detection["mask_area"] = int(cv2.contourArea(largest))
+
+        detections.append(detection)
+    return detections
+
+
+def _analyze_with_existing_detections(
+    img_np: np.ndarray,
+    detections: list[dict],
+    device: str,
+) -> tuple[dict, dict, dict, dict]:
+    try:
+        thermal_anomaly = analyze_ref_test_thermal(img_np, detections)
+    except Exception as exc:
+        thermal_anomaly = {
+            "status": "error",
+            "enabled": True,
+            "error": str(exc),
+        }
+
+    try:
+        autoencoder_anomaly = analyze_ref_test_autoencoder(
+            img_np,
+            detections,
+            model=autoencoder_model,
+            device=device,
+        )
+    except Exception as exc:
+        autoencoder_anomaly = {
+            "status": "error",
+            "enabled": autoencoder_model is not None,
+            "error": str(exc),
+        }
+
+    try:
+        combined_anomaly = build_combined_anomaly(thermal_anomaly, autoencoder_anomaly)
+    except Exception as exc:
+        combined_anomaly = {
+            "status": "error",
+            "enabled": True,
+            "error": str(exc),
+        }
+
+    try:
+        siamese_anomaly = analyze_ref_test_siamese(
+            img_np,
+            detections,
+            model=siamese_model,
+            device=device,
+            config=siamese_config,
+        )
+    except Exception as exc:
+        siamese_anomaly = {
+            "status": "error",
+            "enabled": siamese_model is not None,
+            "error": str(exc),
+        }
+
+    try:
+        combined_anomaly = build_combined_with_siamese(combined_anomaly, siamese_anomaly)
+    except Exception as exc:
+        combined_anomaly = {
+            "status": "error",
+            "enabled": True,
+            "error": str(exc),
+        }
+
+    return thermal_anomaly, autoencoder_anomaly, siamese_anomaly, combined_anomaly

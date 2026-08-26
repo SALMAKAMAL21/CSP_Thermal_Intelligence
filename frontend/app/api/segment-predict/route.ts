@@ -13,6 +13,7 @@ export async function POST(req: Request) {
     const analyzeThermal = incoming.get("analyze_thermal")?.toString() ?? "true";
     const sessionId = incoming.get("session_id")?.toString();
     const resetTracker = incoming.get("reset_tracker")?.toString() ?? "false";
+    const detectionsJson = incoming.get("detections_json")?.toString();
 
     if (!(image instanceof File)) {
       return NextResponse.json({ error: "Image manquante" }, { status: 400 });
@@ -20,13 +21,16 @@ export async function POST(req: Request) {
 
     const forward = new FormData();
     forward.append("image", image);
+    if (detectionsJson) forward.append("detections_json", detectionsJson);
 
-    const target = createBackendUrl("predict");
-    target.searchParams.set("conf", conf);
-    target.searchParams.set("iou", iou);
-    target.searchParams.set("analyze_thermal", analyzeThermal);
-    if (sessionId) target.searchParams.set("session_id", sessionId);
-    target.searchParams.set("reset_tracker", resetTracker);
+    const target = createBackendUrl(detectionsJson ? "analyze-anomaly" : "predict");
+    if (!detectionsJson) {
+      target.searchParams.set("conf", conf);
+      target.searchParams.set("iou", iou);
+      target.searchParams.set("analyze_thermal", analyzeThermal);
+      if (sessionId) target.searchParams.set("session_id", sessionId);
+      target.searchParams.set("reset_tracker", resetTracker);
+    }
 
     const res = await fetchBackend(target, {
       method: "POST",

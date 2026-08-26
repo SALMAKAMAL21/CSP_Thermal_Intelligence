@@ -48,6 +48,9 @@ export function SegmentationSection({
             <Badge variant={backendStatus.autoencoderLoaded ? "live" : "danger"}>
               AE {backendStatus.autoencoderLoaded ? "chargé" : "absent"}
             </Badge>
+            <Badge variant={backendStatus.siameseLoaded ? "live" : "danger"}>
+              Siamese {backendStatus.siameseLoaded ? "chargé" : "absent"}
+            </Badge>
             {aiSummary && (
               <Badge variant={aiSummary.decision === "anomaly" ? "danger" : "live"}>
                 {videoDecisionLabel(aiSummary.decision)}

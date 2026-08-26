@@ -6,6 +6,7 @@ import {
   formatAnomalyScore,
   formatAverage,
   formatTime,
+  getTemperatureDeltaInterpretation,
   getTemperaturePointLabel,
   getTemperatureStats,
   INITIAL_BACKEND_STATUS,
@@ -24,8 +25,15 @@ import {
   type Detection,
   type FramePrediction,
   type PredictResponse,
+  type SiameseAnomaly,
   type ThermalAnomaly
 } from "@/lib/thermal";
+
+type SampledFrameCache = {
+  blob: Blob;
+  detections: Detection[];
+  t: number;
+};
 
 export function useCspAnalysis() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -48,9 +56,14 @@ export function useCspAnalysis() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const hiddenVideoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sampledFramesRef = useRef<SampledFrameCache[]>([]);
 
   const refStats = useMemo(() => getTemperatureStats(tubeRefTemps), [tubeRefTemps]);
   const testStats = useMemo(() => getTemperatureStats(tubeTestTemps), [tubeTestTemps]);
+  const temperatureInterpretation = useMemo(
+    () => getTemperatureDeltaInterpretation(refStats.average, testStats.average),
+    [refStats.average, testStats.average],
+  );
   const allTemperaturesReady =
     refStats.completed >= REQUIRED_TEMPERATURE_COUNT && testStats.completed >= REQUIRED_TEMPERATURE_COUNT;
   const canGenerateReport = !!outUrl && !!aiSummary && hasAnomalyAnalysis && allTemperaturesReady && !generatingReport;
@@ -107,6 +120,7 @@ export function useCspAnalysis() {
 
   function handleVideoChange(event: ChangeEvent<HTMLInputElement>) {
     setVideoFile(event.target.files?.[0] ?? null);
+    sampledFramesRef.current = [];
     setOutUrl(null);
     setProgress(0);
     setPredictionCount(0);
@@ -137,8 +151,9 @@ export function useCspAnalysis() {
     idx: number,
     includeAnomaly: boolean,
     sessionId: string,
-    resetTracker: boolean
-  ): Promise<{ detections: Detection[]; anomaly: ThermalAnomaly | null; autoencoder: AutoencoderAnomaly | null; combined: CombinedAnomaly | null }> {
+    resetTracker: boolean,
+    detections?: Detection[]
+  ): Promise<{ detections: Detection[]; anomaly: ThermalAnomaly | null; autoencoder: AutoencoderAnomaly | null; siamese: SiameseAnomaly | null; combined: CombinedAnomaly | null }> {
     const fd = new FormData();
     fd.append("image", new File([blob], `frame-${idx}.jpg`, { type: "image/jpeg" }));
     fd.append("conf", "0.25");
@@ -146,6 +161,7 @@ export function useCspAnalysis() {
     fd.append("analyze_thermal", includeAnomaly ? "true" : "false");
     fd.append("session_id", sessionId);
     fd.append("reset_tracker", resetTracker ? "true" : "false");
+    if (detections) fd.append("detections_json", JSON.stringify(detections));
 
     const res = await fetch("/api/segment-predict", { method: "POST", body: fd });
     const data = (await res.json()) as PredictResponse;
@@ -160,9 +176,12 @@ export function useCspAnalysis() {
     }
 
     return {
-      detections: (data.detections || []).filter((d) => TARGET_LABELS.has((d.class_name || "").toLowerCase())),
+      detections: ((detections ? data.detections || detections : data.detections) || []).filter((d) =>
+        TARGET_LABELS.has((d.class_name || "").toLowerCase())
+      ),
       anomaly: includeAnomaly ? data.thermal_anomaly || null : null,
       autoencoder: includeAnomaly ? data.autoencoder_anomaly || null : null,
+      siamese: includeAnomaly ? data.siamese_anomaly || null : null,
       combined: includeAnomaly ? data.combined_anomaly || null : null
     };
   }
@@ -275,33 +294,60 @@ export function useCspAnalysis() {
       if (sampleTimes[sampleTimes.length - 1] !== duration) sampleTimes.push(duration);
 
       const predictions: FramePrediction[] = [];
+      const canReuseSegmentation = includeAnomaly && sampledFramesRef.current.length === sampleTimes.length;
 
-      for (let i = 0; i < sampleTimes.length; i++) {
-        const t = sampleTimes[i];
-        await new Promise<void>((resolve) => {
-          const onSeeked = () => {
-            video.removeEventListener("seeked", onSeeked);
-            resolve();
-          };
-          video.addEventListener("seeked", onSeeked);
-          video.currentTime = t;
-        });
+      if (canReuseSegmentation) {
+        setStep("Analyse anomalies sans re-segmentation");
+        for (let i = 0; i < sampledFramesRef.current.length; i++) {
+          const cached = sampledFramesRef.current[i];
+          const frameResult = await predictFrame(cached.blob, i + 1, true, sessionId, false, cached.detections);
+          predictions.push({
+            t: cached.t,
+            detections: cached.detections,
+            anomaly: frameResult.anomaly,
+            autoencoder: frameResult.autoencoder,
+            siamese: frameResult.siamese,
+            combined: frameResult.combined
+          });
+          setPredictionCount(predictions.length);
+          setProgress(Math.round(((i + 1) / sampledFramesRef.current.length) * 55));
+        }
+      } else {
+        const sampledFrames: SampledFrameCache[] = [];
+        for (let i = 0; i < sampleTimes.length; i++) {
+          const t = sampleTimes[i];
+          await new Promise<void>((resolve) => {
+            const onSeeked = () => {
+              video.removeEventListener("seeked", onSeeked);
+              resolve();
+            };
+            video.addEventListener("seeked", onSeeked);
+            video.currentTime = t;
+          });
 
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9));
-        if (!blob) continue;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9));
+          if (!blob) continue;
 
-        const frameResult = await predictFrame(blob, i + 1, includeAnomaly, sessionId, i === 0);
-        predictions.push({
-          t,
-          detections: frameResult.detections,
-          anomaly: frameResult.anomaly,
-          autoencoder: frameResult.autoencoder,
-          combined: frameResult.combined
-        });
-        setPredictionCount(predictions.length);
-        setStep(includeAnomaly ? "Segmentation + anomalies" : "Segmentation YOLO");
-        setProgress(Math.round(((i + 1) / sampleTimes.length) * 55));
+          const frameResult = await predictFrame(blob, i + 1, includeAnomaly, sessionId, i === 0);
+          predictions.push({
+            t,
+            detections: frameResult.detections,
+            anomaly: frameResult.anomaly,
+            autoencoder: frameResult.autoencoder,
+            siamese: frameResult.siamese,
+            combined: frameResult.combined
+          });
+          sampledFrames.push({
+            t,
+            blob,
+            detections: frameResult.detections
+          });
+          setPredictionCount(predictions.length);
+          setStep(includeAnomaly ? "Segmentation + anomalies" : "Segmentation YOLO");
+          setProgress(Math.round(((i + 1) / sampleTimes.length) * 55));
+        }
+        sampledFramesRef.current = sampledFrames;
       }
 
       const summary = summarizePredictions(predictions);
@@ -462,7 +508,12 @@ export function useCspAnalysis() {
                 ? "Le résultat doit être interprété comme une alerte prudente, utile pour orienter une inspection manuelle ciblée."
                 : "L'absence de convergence forte entre les indicateurs est cohérente avec une vidéo normale ou faiblement contrastée.";
 
-        return [decisionText, thermalText, autoencoderText, synthesisText];
+        const temperatureText =
+          temperatureInterpretation.delta === null
+            ? "L'interprétation thermique par températures saisies reste indisponible faute de moyennes exploitables."
+            : `L'écart thermique absolu Delta T = |Ttest - Tref| vaut ${temperatureInterpretation.delta.toFixed(1)} °C, ce qui correspond au niveau ${temperatureInterpretation.level} : ${temperatureInterpretation.label.toLowerCase()}. ${temperatureInterpretation.description}`;
+
+        return [decisionText, thermalText, autoencoderText, temperatureText, synthesisText];
       };
 
       doc.setFillColor(8, 8, 10);
@@ -513,17 +564,31 @@ export function useCspAnalysis() {
         { maxWidth: 178 }
       );
 
-      sectionTitle("Températures relevées", 242);
+      // Keep the temperature table together on its own page so optional fields
+      // cannot collide with the anomaly summary or fall below the page edge.
+      doc.addPage();
+      sectionTitle("Températures relevées", 24);
       const rows = [
         { label: "tube-ref", values: tubeRefTemps, average: refStats.average },
         { label: "tube-test", values: tubeTestTemps, average: testStats.average }
       ];
 
-      let y = 256;
+      let y = 38;
       rows.forEach((row) => {
+        const labels = row.values.map((_, index) => `${getTemperaturePointLabel(index)}: ${row.values[index] || "--"} °C`);
+        const lineA = labels.filter((_, index) => index % 2 === 0).join("    ");
+        const lineB = labels.filter((_, index) => index % 2 === 1).join("    ");
+        const rowHeight = lineB ? 31 : 25;
+
+        if (y + rowHeight > 270) {
+          doc.addPage();
+          sectionTitle("Températures relevées (suite)", 24);
+          y = 38;
+        }
+
         doc.setDrawColor(...border);
         doc.setFillColor(250, 250, 251);
-        doc.roundedRect(16, y, 178, 20, 3, 3, "FD");
+        doc.roundedRect(16, y, 178, rowHeight, 3, 3, "FD");
         doc.setTextColor(...text);
         doc.setFont("helvetica", "bold");
         doc.setFontSize(10);
@@ -531,13 +596,16 @@ export function useCspAnalysis() {
         doc.setTextColor(...muted);
         doc.setFont("helvetica", "normal");
         doc.text(`Moyenne: ${formatAverage(row.average)}`, 142, y + 8);
-        const labels = row.values.map((_, index) => `${getTemperaturePointLabel(index)}: ${row.values[index] || "--"} °C`);
-        const lineA = labels.filter((_, index) => index % 2 === 0).join("    ");
-        const lineB = labels.filter((_, index) => index % 2 === 1).join("    ");
         doc.text(lineA, 22, y + 16, { maxWidth: 150 });
         if (lineB) doc.text(lineB, 22, y + 22, { maxWidth: 150 });
-        y += lineB ? 32 : 26;
+        y += rowHeight + 8;
       });
+
+      if (y + 54 > 275) {
+        doc.addPage();
+        sectionTitle("Températures relevées (suite)", 24);
+        y = 38;
+      }
 
       doc.setFillColor(246, 246, 247);
       doc.roundedRect(16, y + 2, 178, 18, 3, 3, "F");
@@ -550,6 +618,23 @@ export function useCspAnalysis() {
         y + 13,
         { maxWidth: 166 }
       );
+
+      const tempInfoY = y + 26;
+      doc.setDrawColor(...border);
+      doc.setFillColor(250, 250, 251);
+      doc.roundedRect(16, tempInfoY, 178, 26, 3, 3, "FD");
+      doc.setTextColor(...muted);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.text("Interprétation Delta T", 22, tempInfoY + 9);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      const deltaLabel =
+        temperatureInterpretation.delta === null
+          ? "Delta T non disponible"
+          : `Delta T = |Ttest - Tref| = ${temperatureInterpretation.delta.toFixed(1)} °C · Niveau ${temperatureInterpretation.level} · ${temperatureInterpretation.label}`;
+      doc.text(deltaLabel, 22, tempInfoY + 16, { maxWidth: 166 });
+      doc.text(temperatureInterpretation.description, 22, tempInfoY + 22, { maxWidth: 166 });
 
       doc.addPage();
       sectionTitle("Interprétation Finale", 24);
