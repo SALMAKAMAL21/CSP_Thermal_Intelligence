@@ -477,6 +477,24 @@ export function useCspAnalysis() {
         doc.text(value, x + 4, y + 16);
       };
 
+      const aiDetailCard = (title: string, value: string, explanation: string, x: number, y: number, w: number) => {
+        const height = 31;
+        doc.setDrawColor(...border);
+        doc.setFillColor(250, 250, 251);
+        doc.roundedRect(x, y, w, height, 3, 3, "FD");
+        doc.setTextColor(...text);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8);
+        doc.text(title, x + 4, y + 7);
+        doc.setTextColor(...accent);
+        doc.setFontSize(9);
+        doc.text(value, x + 4, y + 14);
+        doc.setTextColor(...muted);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(7.5);
+        doc.text(doc.splitTextToSize(explanation, w - 8), x + 4, y + 21, { maxWidth: w - 8 });
+      };
+
       const buildInterpretation = () => {
         const decisionText =
           aiSummary.decision === "anomaly"
@@ -499,6 +517,13 @@ export function useCspAnalysis() {
               ? `L'autoencoder apporte un signal complémentaire modéré: le tube test est légèrement plus atypique que le tube de référence (ratio maximal ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}).`
               : `L'autoencoder n'apporte pas de confirmation forte: le tube test reste proche du tube de référence du point de vue reconstruction (ratio maximal ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}).`;
 
+        const siameseText =
+          aiSummary.siamesePeakProbability >= 0.6
+            ? `Le modèle Siamese compare directement les représentations des deux tubes et renforce fortement l'écart observé (probabilité maximale ${formatAnomalyScore(aiSummary.siamesePeakProbability)}, ${aiSummary.siameseSupportFrames} frame(s) soutenue(s)).`
+            : aiSummary.siamesePeakProbability >= 0.35
+              ? `Le modèle Siamese observe une différence complémentaire entre tube_ref et tube_test, sans constituer à lui seul une preuve suffisante (probabilité maximale ${formatAnomalyScore(aiSummary.siamesePeakProbability)}).`
+              : `Le modèle Siamese ne relève pas de différence forte entre les deux tubes (probabilité maximale ${formatAnomalyScore(aiSummary.siamesePeakProbability)}).`;
+
         const synthesisText =
           aiSummary.decision === "anomaly" && aiSummary.autoencoderPeakRatio >= 1.1
             ? "La convergence entre comparaison thermique et autoencoder renforce la crédibilité de la détection."
@@ -513,7 +538,7 @@ export function useCspAnalysis() {
             ? "L'interprétation thermique par températures saisies reste indisponible faute de moyennes exploitables."
             : `L'écart thermique absolu Delta T = |Ttest - Tref| vaut ${temperatureInterpretation.delta.toFixed(1)} °C, ce qui correspond au niveau ${temperatureInterpretation.level} : ${temperatureInterpretation.label.toLowerCase()}. ${temperatureInterpretation.description}`;
 
-        return [decisionText, thermalText, autoencoderText, temperatureText, synthesisText];
+        return [decisionText, thermalText, autoencoderText, siameseText, temperatureText, synthesisText];
       };
 
       doc.setFillColor(8, 8, 10);
@@ -557,11 +582,53 @@ export function useCspAnalysis() {
         233,
         { maxWidth: 178 }
       );
-      doc.text(
-        `Support autoencoder: ${aiSummary.autoencoderSupportFrames} frames · Delta moyen AE: ${formatAnomalyScore(aiSummary.autoencoderAverageDelta)} · Ratio max AE: ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}`,
+      doc.setTextColor(...text);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text("Détail des systèmes de détection", 16, 247);
+
+      const thermalExplanation =
+        aiSummary.maxAnomalyScore >= 0.42
+          ? "Compare les profils thermiques tube-ref et tube-test. Un écart fort et persistant est détecté."
+          : aiSummary.maxAnomalyScore >= 0.26
+            ? "Compare les profils thermiques des deux tubes. Un écart modéré est observé."
+            : "Compare les profils thermiques des deux tubes. Aucun écart fort n'est observé.";
+      const autoencoderExplanation =
+        aiSummary.autoencoderPeakRatio >= 1.25
+          ? "Reconstruit l'apparence attendue d'un tube normal. Le tube-test s'en éloigne fortement."
+          : aiSummary.autoencoderPeakRatio >= 1.1
+            ? "Reconstruit l'apparence attendue d'un tube normal. Un écart complémentaire est observé."
+            : "Reconstruit l'apparence attendue d'un tube normal. Pas de confirmation forte d'anomalie.";
+      const siameseExplanation =
+        aiSummary.siamesePeakProbability >= 0.6
+          ? "Compare directement les deux tubes. La différence visuelle estimée est forte."
+          : aiSummary.siamesePeakProbability >= 0.35
+            ? "Compare directement les deux tubes. Une différence perceptible est estimée."
+            : "Compare directement les deux tubes. Pas de différence anormale forte estimée.";
+
+      aiDetailCard(
+        "THERMIQUE",
+        `Pic ${formatAnomalyScore(aiSummary.maxAnomalyScore)}`,
+        thermalExplanation,
         16,
-        238,
-        { maxWidth: 178 }
+        253,
+        56
+      );
+      aiDetailCard(
+        "AUTOENCODER",
+        `Ratio ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}`,
+        autoencoderExplanation,
+        77,
+        253,
+        56
+      );
+      aiDetailCard(
+        "SIAMESE",
+        `Prob. ${formatAnomalyScore(aiSummary.siamesePeakProbability)}`,
+        siameseExplanation,
+        138,
+        253,
+        56
       );
 
       // Keep the temperature table together on its own page so optional fields
