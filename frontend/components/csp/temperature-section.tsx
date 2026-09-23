@@ -5,12 +5,12 @@ import { FiPlus } from "react-icons/fi";
 import {
   getTemperaturePlaceholder,
   getTemperaturePointLabel,
-  formatAverage,
   REQUIRED_TEMPERATURE_COUNT,
   type TemperatureStats
 } from "@/lib/thermal";
 
 type TemperatureSectionProps = {
+  disabled?: boolean;
   refStats: TemperatureStats;
   testStats: TemperatureStats;
   tubeRefTemps: string[];
@@ -20,6 +20,7 @@ type TemperatureSectionProps = {
 };
 
 export function TemperatureSection({
+  disabled,
   refStats,
   testStats,
   tubeRefTemps,
@@ -35,17 +36,17 @@ export function TemperatureSection({
 
       <div className="tube-temperature-list">
         <TubeTemperatureCard
-          average={formatAverage(refStats.average)}
+          disabled={disabled}
           complete={refStats.completed >= REQUIRED_TEMPERATURE_COUNT}
-          label="tube-ref"
+          label="Tube référence"
           tone="ref"
           values={tubeRefTemps}
           onChange={(index, value) => onTemperatureChange("ref", index, value)}
         />
         <TubeTemperatureCard
-          average={formatAverage(testStats.average)}
+          disabled={disabled}
           complete={testStats.completed >= REQUIRED_TEMPERATURE_COUNT}
-          label="tube-test"
+          label="Tube test"
           tone="test"
           values={tubeTestTemps}
           onChange={(index, value) => onTemperatureChange("test", index, value)}
@@ -58,6 +59,7 @@ export function TemperatureSection({
           variant="outline"
           size="sm"
           type="button"
+          disabled={disabled}
           onClick={onAddTemperatureField}
           aria-label="Ajouter un champ thermique aux deux tubes"
         >
@@ -69,7 +71,7 @@ export function TemperatureSection({
 }
 
 type TubeTemperatureCardProps = {
-  average: string;
+  disabled?: boolean;
   complete: boolean;
   label: string;
   onChange: (index: number, value: string) => void;
@@ -77,19 +79,14 @@ type TubeTemperatureCardProps = {
   values: string[];
 };
 
-function TubeTemperatureCard({ average, complete, label, onChange, tone, values }: TubeTemperatureCardProps) {
+function TubeTemperatureCard({ disabled, complete, label, onChange, tone, values }: TubeTemperatureCardProps) {
   return (
     <Card className={`tube-card ${tone === "test" ? "test-card" : "ref-card"} ${complete ? "is-complete" : ""}`} aria-label={`Températures ${tone}`}>
       <div className="tube-card-header">
         <div>
           <h3>{label}</h3>
         </div>
-        <div className="tube-header-actions">
-          <div className="tube-average">
-            <span>Moyenne</span>
-            <strong>{average}</strong>
-          </div>
-        </div>
+
       </div>
 
       <div className="measure-grid">
@@ -100,7 +97,10 @@ function TubeTemperatureCard({ average, complete, label, onChange, tone, values 
             <span>{point} (°C)</span>
             <Input
               id={`tube-${tone}-${point}`}
+              disabled={disabled}
               type="number"
+              required
+              step="any"
               inputMode="decimal"
               placeholder={getTemperaturePlaceholder(tone, index)}
               value={value}

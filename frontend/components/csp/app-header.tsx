@@ -9,7 +9,7 @@ export function AppHeader() {
         <Image className="brand-logo" src={logoImage} alt="Green Energy Park" priority />
         <div className="brand-copy">
           <strong>CSP Thermal Intelligence</strong>
-          <span>Détection d&apos;anomalies par segmentation, comparaison thermique et autoencoder.</span>
+          <span>Classification des tubes par images thermiques et différence de température.</span>
         </div>
       </a>
       <ThemeToggle />

@@ -22,14 +22,14 @@ export function ReportSection({
       <div className={`report-card ${canGenerateReport ? "is-ready" : ""}`}>
         <div className="report-copy">
           <h2 id="report-title">Rapport d'Inspection</h2>
-          <p>Compilez les résultats IA, les captures de segmentation et les écarts thermiques dans un document professionnel certifié.</p>
+          <p>Une page avec le niveau prédit, les températures et une image représentative.</p>
           <div className="report-actions">
-            <Button className="report-generate-action" variant="dark" size="md" type="button" onClick={onGenerate} disabled={generatingReport}>
+            <Button className="report-generate-action" variant="dark" size="md" type="button" onClick={onGenerate} disabled={generatingReport || !canGenerateReport}>
               <FiFileText aria-hidden="true" />
               {generatingReport ? "Génération" : "Générer PDF"}
             </Button>
             {reportUrl ? (
-              <ButtonLink variant="outline" size="sm" href={reportUrl} download="rapport-thermique-csp.pdf">
+              <ButtonLink variant="outline" size="sm" href={reportUrl} download="rapport_thermique_csp.pdf">
                 <FiDownload aria-hidden="true" />
                 Rapport
               </ButtonLink>
@@ -62,7 +62,7 @@ export function ReportSection({
               <h3>Aperçu du rapport PDF</h3>
               <p>Prévisualisation du rapport généré avant téléchargement.</p>
             </div>
-            <ButtonLink variant="primary" size="md" href={reportUrl} download="rapport-thermique-csp.pdf">
+            <ButtonLink variant="primary" size="md" href={reportUrl} download="rapport_thermique_csp.pdf">
               <FiDownload aria-hidden="true" />
               Télécharger le rapport
             </ButtonLink>

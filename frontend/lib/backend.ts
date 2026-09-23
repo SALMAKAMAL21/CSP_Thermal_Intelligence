@@ -10,12 +10,16 @@ export function createBackendUrl(path: string) {
 export async function readBackendJson(response: Response): Promise<BackendJson> {
   const raw = await response.text();
 
-  if (!raw) return {};
+  if (!raw.trim()) {
+    if (response.ok) throw new Error("FastAPI renvoie une réponse vide. Vérifiez SEGMENTATION_API_URL.");
+    return {};
+  }
 
   try {
     return JSON.parse(raw) as BackendJson;
   } catch {
-    return { raw };
+    if (response.ok) throw new Error("Le serveur configuré ne renvoie pas de JSON. Vérifiez que SEGMENTATION_API_URL pointe vers FastAPI.");
+    return { message: `Réponse non JSON du backend (HTTP ${response.status}).` };
   }
 }
 

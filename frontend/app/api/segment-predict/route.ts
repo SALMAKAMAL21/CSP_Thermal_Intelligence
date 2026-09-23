@@ -21,6 +21,10 @@ export async function POST(req: Request) {
 
     const forward = new FormData();
     forward.append("image", image);
+    for (const key of ["t_ref", "t_test"]) {
+      const value = incoming.get(key);
+      if (typeof value === "string") forward.append(key, value);
+    }
     if (detectionsJson) forward.append("detections_json", detectionsJson);
 
     const target = createBackendUrl(detectionsJson ? "analyze-anomaly" : "predict");

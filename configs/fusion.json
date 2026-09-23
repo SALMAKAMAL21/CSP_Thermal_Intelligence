@@ -1,0 +1,7 @@
+{
+  "delta_t_mean": 31.0,
+  "delta_t_std": 24.74819424280426,
+  "delta_t_convention": "T_tube_ref - T_tube_test",
+  "checkpoint_sha256": "78d07b3963f0b72d2f19ce8b6ba462c3064b706fb6daa7dedef89c218cfd1b6d",
+  "aggregation": "mean cumulative probabilities over valid frame pairs; count > 0.5"
+}

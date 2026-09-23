@@ -53,6 +53,7 @@ Thumbs.db
 # Frontend dependencies
 frontend/node_modules/
 frontend/.next/
+frontend/.next-dev/
 
 # Archives
 *.zip

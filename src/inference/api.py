@@ -4,7 +4,7 @@ API FastAPI pour l'inference YOLOv11n-seg
 Recoit des images du drone et retourne les segmentations des composants CSP.
 
 Usage:
-    uvicorn src.inference.api:app --host 0.0.0.0 --port 8000
+uvicorn src.inference.api:app --host 0.0.0.0 --port 8002
 
 Endpoints:
     POST /predict          - Segmentation d'une image
@@ -22,14 +22,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 from PIL import Image
 from ultralytics import YOLO
 
-from .autoencoder_anomaly import analyze_ref_test_autoencoder, build_combined_anomaly, load_autoencoder_model
-from .siamese_anomaly import analyze_ref_test_siamese, build_combined_with_siamese, load_siamese_model
-from .thermal_anomaly import analyze_ref_test_thermal
+from .fusion_anomaly import FusionPredictor, temperature_delta
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 AUTOENCODER_MODEL_PATH = PROJECT_ROOT / "src" / "models" / "best_autoencoder.pt"
@@ -43,9 +41,9 @@ def resolve_model_path() -> Path:
         return Path(env_path)
 
     candidates = [
-        PROJECT_ROOT / "ml" / "best_model.pt",
-        PROJECT_ROOT / "ml" / "yolo_seg.pt",
-        PROJECT_ROOT / "src" / "models" / "best_model.pt",
+        # PROJECT_ROOT / "ml" / "best_model.pt",
+        # PROJECT_ROOT / "ml" / "yolo_seg.pt",
+        PROJECT_ROOT / "src" / "models" / "opt_best.pt",
         PROJECT_ROOT / "src" / "models" / "yolo_seg.pt",
         PROJECT_ROOT / "src" / "models" / "yolo-seg.pt",
         PROJECT_ROOT / "src" / "models" / "csp_seg1.pt",
@@ -72,6 +70,10 @@ autoencoder_model = None
 siamese_model = None
 siamese_config = None
 inference_device = "cpu"
+fusion_predictor = None
+fusion_error = None
+FUSION_MODEL_PATH = Path(os.getenv("FUSION_MODEL_PATH", str(PROJECT_ROOT / "src/models/best_fusion_model.pt")))
+FUSION_CONFIG_PATH = Path(os.getenv("FUSION_CONFIG_PATH", str(PROJECT_ROOT / "configs/fusion.json")))
 
 
 @dataclass
@@ -205,7 +207,7 @@ def _apply_tube_tracking(detections: list[dict], session_id: str | None, reset_t
 @app.on_event("startup")
 async def load_model():
     """Charge le modele au demarrage de l'API."""
-    global model, autoencoder_model, siamese_model, siamese_config, inference_device
+    global model, inference_device, fusion_predictor, fusion_error
 
     if not MODEL_PATH.exists():
         print(f"[WARN] Modele non trouve : {MODEL_PATH}")
@@ -227,26 +229,15 @@ async def load_model():
     model.predict(dummy, device=device, verbose=False)
     print("[API] Modele pret.")
 
-    if AUTOENCODER_MODEL_PATH.exists():
-        try:
-            autoencoder_model = load_autoencoder_model(AUTOENCODER_MODEL_PATH, device=device)
-            print(f"[API] Autoencoder charge depuis {AUTOENCODER_MODEL_PATH.name}.")
-        except Exception as exc:
-            autoencoder_model = None
-            print(f"[WARN] Chargement autoencoder impossible: {exc}")
-    else:
-        print(f"[WARN] Autoencoder non trouve : {AUTOENCODER_MODEL_PATH}")
-
-    if SIAMESE_MODEL_PATH.exists():
-        try:
-            siamese_model, siamese_config = load_siamese_model(SIAMESE_MODEL_PATH, device=device)
-            print(f"[API] Siamese charge depuis {SIAMESE_MODEL_PATH.name}.")
-        except Exception as exc:
-            siamese_model = None
-            siamese_config = None
-            print(f"[WARN] Chargement siamese impossible: {exc}")
-    else:
-        print(f"[WARN] Siamese non trouve : {SIAMESE_MODEL_PATH}")
+    # Les anciens checkpoints restent sur disque, sans chargement ni vote.
+    try:
+        fusion_predictor = FusionPredictor(FUSION_MODEL_PATH, FUSION_CONFIG_PATH, device)
+        fusion_error = None
+        print("[API] Fusion ordinale chargée.")
+    except Exception as exc:
+        fusion_predictor = None
+        fusion_error = str(exc)
+        print(f"[WARN] Fusion indisponible : {exc}")
 
 
 @app.get("/health")
@@ -255,6 +246,8 @@ async def health():
     return {
         "status": "ok" if model is not None else "no_model",
         "model_loaded": model is not None,
+        "fusion_loaded": fusion_predictor is not None,
+        "fusion_error": fusion_error,
         "autoencoder_loaded": autoencoder_model is not None,
         "siamese_loaded": siamese_model is not None,
     }
@@ -270,6 +263,7 @@ async def model_info():
         "model": str(MODEL_PATH.name),
         "classes": model.names,
         "task": "segment",
+        "fusion_model": FUSION_MODEL_PATH.name if fusion_predictor is not None else None,
         "autoencoder_model": AUTOENCODER_MODEL_PATH.name if autoencoder_model is not None else None,
         "siamese_model": SIAMESE_MODEL_PATH.name if siamese_model is not None else None,
     }
@@ -278,11 +272,13 @@ async def model_info():
 @app.post("/predict")
 async def predict(
     image: UploadFile = File(...),
-    conf: float = 0.25,
+    conf: float = 0.5,
     iou: float = 0.45,
     analyze_thermal: bool = True,
     session_id: str | None = None,
     reset_tracker: bool = False,
+    t_ref: float | None = Form(None),
+    t_test: float | None = Form(None),
 ):
     """
     Segmentation d'une image drone.
@@ -294,64 +290,37 @@ async def predict(
 
     img_np = await _read_upload_image(image)
 
+    if analyze_thermal:
+        _require_fusion(t_ref, t_test)
+
     # Inference
     start = time.time()
 
     device = inference_device
 
-    results = model.predict(img_np, device=device, conf=conf, iou=iou, imgsz=640, verbose=False)
+    # Ultralytics attend BGR pour une entrée numpy ; les ROI de fusion restent RGB.
+    results = model.predict(img_np[:, :, ::-1].copy(), device=device, conf=conf, iou=iou, imgsz=640, verbose=False)
     inference_time = (time.time() - start) * 1000
 
     result = results[0]
 
     detections = _format_detections(result, model.names, img_np)
 
-    # Post-regle metier: si on detecte des tubes, forcer la convention
-    # tube_ref = tube le plus haut, tube_test = tube le plus bas.
-    # Cela evite les inversions de classes quand les deux tubes se ressemblent visuellement.
-    detections = _apply_tube_tracking(detections, session_id=session_id, reset_tracker=reset_tracker)
+    # Conserver les classes YOLO, comme extract_rois.py à l'entraînement.
+    # Ne pas réattribuer les rôles selon la position verticale.
 
     # Filtrer pour ne garder que les HCE (tubes recepteurs) si demande
     hce_detections = [d for d in detections if d["class_name"] in {"hce", "tube_ref", "tube_test", "tube"}]
 
-    if analyze_thermal:
-        thermal_anomaly, autoencoder_anomaly, siamese_anomaly, combined_anomaly = _analyze_with_existing_detections(
-            img_np,
-            detections,
-            device,
-        )
-    else:
-        thermal_anomaly = {
-            "status": "disabled",
-            "enabled": False,
-            "reason": "thermal analysis not requested",
-        }
-        autoencoder_anomaly = {
-            "status": "disabled",
-            "enabled": autoencoder_model is not None,
-            "reason": "autoencoder analysis not requested",
-        }
-        siamese_anomaly = {
-            "status": "disabled",
-            "enabled": siamese_model is not None,
-            "reason": "siamese analysis not requested",
-        }
-        combined_anomaly = {
-            "status": "disabled",
-            "enabled": False,
-            "reason": "combined analysis not requested",
-        }
+    fusion = fusion_predictor.predict(img_np, detections, t_ref, t_test) if analyze_thermal else {"status": "disabled"}
 
     return {
         "inference_time_ms": round(inference_time, 1),
         "image_size": {"width": img_np.shape[1], "height": img_np.shape[0]},
         "total_detections": len(detections),
         "hce_count": len(hce_detections),
-        "thermal_anomaly": thermal_anomaly,
-        "autoencoder_anomaly": autoencoder_anomaly,
-        "siamese_anomaly": siamese_anomaly,
-        "combined_anomaly": combined_anomaly,
         "detections": detections,
+        "fusion": fusion,
     }
 
 
@@ -359,6 +328,8 @@ async def predict(
 async def analyze_anomaly(
     image: UploadFile = File(...),
     detections_json: str = Form(...),
+    t_ref: float = Form(...),
+    t_test: float = Form(...),
 ):
     if model is None:
         return JSONResponse(status_code=503, content={"error": "Modele non charge"})
@@ -368,16 +339,20 @@ async def analyze_anomaly(
     except json.JSONDecodeError:
         return JSONResponse(status_code=400, content={"error": "detections_json invalide"})
 
-    if not isinstance(detections, list):
+    if not isinstance(detections, list) or not all(isinstance(d, dict) for d in detections):
         return JSONResponse(status_code=400, content={"error": "detections_json doit etre une liste"})
 
     img_np = await _read_upload_image(image)
     start = time.time()
-    thermal_anomaly, autoencoder_anomaly, siamese_anomaly, combined_anomaly = _analyze_with_existing_detections(
-        img_np,
-        detections,
-        inference_device,
-    )
+    _require_fusion(t_ref, t_test)
+    for detection in detections:
+        try:
+            confidence = float(detection.get("confidence", 0))
+            if not np.isfinite(confidence) or not 0 <= confidence <= 1:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="Confiance de détection invalide")
+    fusion = fusion_predictor.predict(img_np, detections, t_ref, t_test)
     analysis_time_ms = (time.time() - start) * 1000
 
     hce_detections = [d for d in detections if d.get("class_name") in {"hce", "tube_ref", "tube_test", "tube"}]
@@ -387,17 +362,17 @@ async def analyze_anomaly(
         "image_size": {"width": img_np.shape[1], "height": img_np.shape[0]},
         "total_detections": len(detections),
         "hce_count": len(hce_detections),
-        "thermal_anomaly": thermal_anomaly,
-        "autoencoder_anomaly": autoencoder_anomaly,
-        "siamese_anomaly": siamese_anomaly,
-        "combined_anomaly": combined_anomaly,
         "detections": detections,
+        "fusion": fusion,
     }
 
 
 async def _read_upload_image(image: UploadFile) -> np.ndarray:
     contents = await image.read()
-    img = Image.open(io.BytesIO(contents))
+    try:
+        img = Image.open(io.BytesIO(contents)).convert("RGB")
+    except Exception:
+        raise HTTPException(status_code=422, detail="Image illisible")
     return np.array(img)
 
 
@@ -425,65 +400,10 @@ def _format_detections(result, model_names: dict[int, str], img_np: np.ndarray) 
     return detections
 
 
-def _analyze_with_existing_detections(
-    img_np: np.ndarray,
-    detections: list[dict],
-    device: str,
-) -> tuple[dict, dict, dict, dict]:
+def _require_fusion(t_ref, t_test):
     try:
-        thermal_anomaly = analyze_ref_test_thermal(img_np, detections)
-    except Exception as exc:
-        thermal_anomaly = {
-            "status": "error",
-            "enabled": True,
-            "error": str(exc),
-        }
-
-    try:
-        autoencoder_anomaly = analyze_ref_test_autoencoder(
-            img_np,
-            detections,
-            model=autoencoder_model,
-            device=device,
-        )
-    except Exception as exc:
-        autoencoder_anomaly = {
-            "status": "error",
-            "enabled": autoencoder_model is not None,
-            "error": str(exc),
-        }
-
-    try:
-        combined_anomaly = build_combined_anomaly(thermal_anomaly, autoencoder_anomaly)
-    except Exception as exc:
-        combined_anomaly = {
-            "status": "error",
-            "enabled": True,
-            "error": str(exc),
-        }
-
-    try:
-        siamese_anomaly = analyze_ref_test_siamese(
-            img_np,
-            detections,
-            model=siamese_model,
-            device=device,
-            config=siamese_config,
-        )
-    except Exception as exc:
-        siamese_anomaly = {
-            "status": "error",
-            "enabled": siamese_model is not None,
-            "error": str(exc),
-        }
-
-    try:
-        combined_anomaly = build_combined_with_siamese(combined_anomaly, siamese_anomaly)
-    except Exception as exc:
-        combined_anomaly = {
-            "status": "error",
-            "enabled": True,
-            "error": str(exc),
-        }
-
-    return thermal_anomaly, autoencoder_anomaly, siamese_anomaly, combined_anomaly
+        temperature_delta(t_ref, t_test)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if fusion_predictor is None:
+        raise HTTPException(status_code=503, detail=f"Fusion indisponible : {fusion_error or 'checkpoint absent'}")

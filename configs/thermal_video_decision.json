@@ -1,9 +1,0 @@
-{
-  "frame_warning_score": 0.26,
-  "frame_alert_score": 0.42,
-  "video_mean_warning_score": 0.02,
-  "video_mean_alert_score": 0.04,
-  "suspect_ratio_warning": 0.04,
-  "suspect_ratio_alert": 0.1,
-  "min_persistent_frames": 2
-}

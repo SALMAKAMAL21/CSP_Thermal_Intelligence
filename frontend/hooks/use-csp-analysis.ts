@@ -1,33 +1,17 @@
 import type { ChangeEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  createRefTemperatures,
-  createTestTemperatures,
-  formatAnomalyScore,
-  formatAverage,
-  formatTime,
-  getTemperatureDeltaInterpretation,
-  getTemperaturePointLabel,
-  getTemperatureStats,
-  INITIAL_BACKEND_STATUS,
-  pickColor,
-  REQUIRED_TEMPERATURE_COUNT,
-  REPORT_WAITING_STATUS,
-  confidenceLabel,
-  severityLabel,
-  summarizePredictions,
-  TARGET_LABELS,
-  videoDecisionLabel,
-  type AiSummary,
-  type AutoencoderAnomaly,
-  type CombinedAnomaly,
-  type BackendConnectionStatus,
-  type Detection,
-  type FramePrediction,
-  type PredictResponse,
-  type SiameseAnomaly,
-  type ThermalAnomaly
+  createRefTemperatures, createTestTemperatures, getTemperatureStats,
+  INITIAL_BACKEND_STATUS, pickColor, REQUIRED_TEMPERATURE_COUNT,
+  REPORT_WAITING_STATUS, summarizePredictions, TARGET_LABELS, levelLabel,
+  type AiSummary, type BackendConnectionStatus, type Detection,
+  type FramePrediction, type PredictResponse, type FusionResult
 } from "@/lib/thermal";
+import { drawFusionReport, type ReportCapture } from "@/lib/fusion-report";
+import { captureVideoFrame, seekVideoFrame } from "@/lib/video-frame";
+import { readApiJson } from "@/lib/api-response";
+
+import { emptyInspection, completeInspectionTimestamp, inspectionComplete, temperaturesComplete, type InspectionDetails } from "@/lib/inspection";
 
 type SampledFrameCache = {
   blob: Blob;
@@ -36,6 +20,7 @@ type SampledFrameCache = {
 };
 
 export function useCspAnalysis() {
+  const [inspection, setInspection] = useState<InspectionDetails>(emptyInspection);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -56,31 +41,34 @@ export function useCspAnalysis() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const hiddenVideoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const reportCaptureRef = useRef<ReportCapture | null>(null);
   const sampledFramesRef = useRef<SampledFrameCache[]>([]);
+  const midpointFrameRef = useRef<SampledFrameCache | null>(null);
 
   const refStats = useMemo(() => getTemperatureStats(tubeRefTemps), [tubeRefTemps]);
   const testStats = useMemo(() => getTemperatureStats(tubeTestTemps), [tubeTestTemps]);
-  const temperatureInterpretation = useMemo(
-    () => getTemperatureDeltaInterpretation(refStats.average, testStats.average),
-    [refStats.average, testStats.average],
-  );
-  const allTemperaturesReady =
-    refStats.completed >= REQUIRED_TEMPERATURE_COUNT && testStats.completed >= REQUIRED_TEMPERATURE_COUNT;
-  const canGenerateReport = !!outUrl && !!aiSummary && hasAnomalyAnalysis && allTemperaturesReady && !generatingReport;
+  const allTemperaturesReady = temperaturesComplete(tubeRefTemps) && temperaturesComplete(tubeTestTemps);
+  const canAnalyze = !!videoFile && inspectionComplete(inspection) && allTemperaturesReady && !running && !generatingReport;
+  const canGenerateReport = !!aiSummary && aiSummary.level !== null && hasAnomalyAnalysis &&
+    allTemperaturesReady && inspectionComplete(inspection) && !generatingReport && !running;
 
   const refreshBackendStatus = useCallback(async () => {
     setBackendStatus((current) => ({ ...current, checking: true }));
 
     try {
       const res = await fetch("/api/segment-check", { cache: "no-store" });
-      const data = (await res.json()) as Omit<BackendConnectionStatus, "checking">;
-      const nextStatus = { ...data, checking: false };
+      const data = await readApiJson<Omit<BackendConnectionStatus, "checking">>(res, "/api/segment-check");
+      if (!res.ok || typeof data.reachable !== "boolean" || typeof data.modelLoaded !== "boolean") {
+        throw new Error(`Impossible de vérifier FastAPI : erreur de l’interface sur /api/segment-check (HTTP ${res.status}). Consultez le terminal Next.js.`);
+      }
+      const nextStatus = { ...data, checking: false, frontendError: false };
       setBackendStatus(nextStatus);
       return nextStatus;
     } catch (event) {
-      const details = event instanceof Error ? event.message : "Connexion backend impossible";
+      const details = event instanceof Error ? event.message : "Connexion à l’interface impossible";
       const nextStatus: BackendConnectionStatus = {
         checking: false,
+        frontendError: true,
         details,
         modelLoaded: false,
         reachable: false
@@ -119,8 +107,13 @@ export function useCspAnalysis() {
   }, [refreshBackendStatus]);
 
   function handleVideoChange(event: ChangeEvent<HTMLInputElement>) {
+    if (running || generatingReport) return;
+    reportCaptureRef.current = null;
+    setTubeRefTemps(createRefTemperatures());
+    setTubeTestTemps(createTestTemperatures());
     setVideoFile(event.target.files?.[0] ?? null);
     sampledFramesRef.current = [];
+    midpointFrameRef.current = null;
     setOutUrl(null);
     setProgress(0);
     setPredictionCount(0);
@@ -132,17 +125,35 @@ export function useCspAnalysis() {
     setReportStatus(REPORT_WAITING_STATUS);
   }
 
+  function updateInspection(field: keyof InspectionDetails, value: string) {
+    if (running || generatingReport) return;
+    setInspection(current => ({ ...current, [field]: value }));
+    setAiSummary(null);
+    setHasAnomalyAnalysis(false);
+    setReportUrl(null);
+    reportCaptureRef.current = null;
+    setReportStatus("Informations modifiées : relancez l’analyse pour actualiser le résultat.");
+  }
+
   function updateTemperature(tube: "ref" | "test", index: number, value: string) {
+    if (running || generatingReport) return;
+    setAiSummary(null);
+    setHasAnomalyAnalysis(false);
+    reportCaptureRef.current = null;
     const setter = tube === "ref" ? setTubeRefTemps : setTubeTestTemps;
     setter((current) => current.map((item, itemIndex) => (itemIndex === index ? value : item)));
-    setReportStatus(outUrl && aiSummary ? "Rapport à régénérer avec les nouvelles températures." : REPORT_WAITING_STATUS);
+    setReportStatus("Températures modifiées : relancez la classification avant de générer le rapport.");
     setReportUrl(null);
   }
 
   function addTemperatureField() {
+    if (running || generatingReport) return;
+    setAiSummary(null);
+    setHasAnomalyAnalysis(false);
+    reportCaptureRef.current = null;
     setTubeRefTemps((current) => [...current, ""]);
     setTubeTestTemps((current) => [...current, ""]);
-    setReportStatus(outUrl && aiSummary ? "Rapport à régénérer après ajout d'un champ thermique." : REPORT_WAITING_STATUS);
+    setReportStatus("Mesures modifiées : relancez la classification avant de générer le rapport.");
     setReportUrl(null);
   }
 
@@ -153,10 +164,14 @@ export function useCspAnalysis() {
     sessionId: string,
     resetTracker: boolean,
     detections?: Detection[]
-  ): Promise<{ detections: Detection[]; anomaly: ThermalAnomaly | null; autoencoder: AutoencoderAnomaly | null; siamese: SiameseAnomaly | null; combined: CombinedAnomaly | null }> {
+  ): Promise<{ detections: Detection[]; fusion: FusionResult | null }> {
     const fd = new FormData();
     fd.append("image", new File([blob], `frame-${idx}.jpg`, { type: "image/jpeg" }));
-    fd.append("conf", "0.25");
+    fd.append("conf", "0.5");
+    if (includeAnomaly) {
+      fd.append("t_ref", String(refStats.average));
+      fd.append("t_test", String(testStats.average));
+    }
     fd.append("iou", "0.45");
     fd.append("analyze_thermal", includeAnomaly ? "true" : "false");
     fd.append("session_id", sessionId);
@@ -164,7 +179,7 @@ export function useCspAnalysis() {
     if (detections) fd.append("detections_json", JSON.stringify(detections));
 
     const res = await fetch("/api/segment-predict", { method: "POST", body: fd });
-    const data = (await res.json()) as PredictResponse;
+    const data = await readApiJson<PredictResponse>(res, "/api/segment-predict");
     if (!res.ok || data.error) {
       const details =
         data.backendStatus || data.backendUrl
@@ -179,10 +194,7 @@ export function useCspAnalysis() {
       detections: ((detections ? data.detections || detections : data.detections) || []).filter((d) =>
         TARGET_LABELS.has((d.class_name || "").toLowerCase())
       ),
-      anomaly: includeAnomaly ? data.thermal_anomaly || null : null,
-      autoencoder: includeAnomaly ? data.autoencoder_anomaly || null : null,
-      siamese: includeAnomaly ? data.siamese_anomaly || null : null,
-      combined: includeAnomaly ? data.combined_anomaly || null : null
+      fusion: includeAnomaly ? data.fusion || null : null
     };
   }
 
@@ -229,7 +241,17 @@ export function useCspAnalysis() {
   }
 
   async function annotateVideo(includeAnomaly: boolean) {
+    if (!canAnalyze) {
+      setError("Complétez les informations opérateur, la vidéo, toutes les températures et votre observation visuelle avant de lancer l’analyse.");
+      return;
+    }
     if (!videoFile) return;
+    if (includeAnomaly && !allTemperaturesReady) {
+      setError("Renseignez au moins quatre températures valides par tube avant la classification.");
+      return;
+    }
+    setInspection(completeInspectionTimestamp(inspection));
+    reportCaptureRef.current = null;
     setRunning(true);
     setError(null);
     setOutUrl(null);
@@ -243,8 +265,8 @@ export function useCspAnalysis() {
 
     const backend = await refreshBackendStatus();
     if (!backend.reachable) {
-      setError(`Backend IA hors ligne${backend.backendUrl ? ` (${backend.backendUrl})` : ""}. ${backend.details ?? ""}`.trim());
-      setStep("Backend hors ligne");
+      setError(backend.frontendError ? backend.details ?? "Erreur de connexion à l’interface" : `Backend IA hors ligne${backend.backendUrl ? ` (${backend.backendUrl})` : ""}. ${backend.details ?? ""}`.trim());
+      setStep(backend.frontendError ? "Erreur de l’interface" : "Backend hors ligne");
       setRunning(false);
       return;
     }
@@ -256,6 +278,11 @@ export function useCspAnalysis() {
       return;
     }
 
+    if (includeAnomaly && !backend.fusionLoaded) {
+      setError(`Modèle de fusion indisponible. ${backend.details ?? "Vérifiez le checkpoint et configs/fusion.json."}`);
+      setRunning(false);
+      return;
+    }
     const video = hiddenVideoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) {
@@ -265,18 +292,23 @@ export function useCspAnalysis() {
     }
 
     const sourceUrl = URL.createObjectURL(videoFile);
-    video.src = sourceUrl;
+    let captureStream: MediaStream | null = null;
+    let activeRecorder: MediaRecorder | null = null;
+    let animationFrame: number | null = null;
     video.muted = true;
     video.playsInline = true;
 
     try {
       setStep("Chargement vidéo");
       await new Promise<void>((resolve, reject) => {
-        video.onloadedmetadata = () => resolve();
+        video.onloadeddata = () => resolve();
         video.onerror = () => reject(new Error("Lecture vidéo impossible"));
+        video.src = sourceUrl;
+        video.load();
       });
 
-      const duration = Math.max(video.duration || 0, 1);
+      if (!Number.isFinite(video.duration) || video.duration <= 0) throw new Error("Durée vidéo invalide");
+      const duration = video.duration;
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
 
@@ -284,30 +316,27 @@ export function useCspAnalysis() {
       if (!ctx) throw new Error("Canvas context indisponible");
 
       setStep(includeAnomaly ? "Segmentation + analyse" : "Segmentation YOLO");
-      const samplingFps = 4;
+      const samplingFps = 1; // Même cadence que les frames d’entraînement.
       const sessionId =
         typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
           ? crypto.randomUUID()
           : `session-${Date.now()}`;
       const sampleTimes: number[] = [];
       for (let t = 0; t < duration; t += 1 / samplingFps) sampleTimes.push(t);
-      if (sampleTimes[sampleTimes.length - 1] !== duration) sampleTimes.push(duration);
+
 
       const predictions: FramePrediction[] = [];
       const canReuseSegmentation = includeAnomaly && sampledFramesRef.current.length === sampleTimes.length;
 
       if (canReuseSegmentation) {
-        setStep("Analyse anomalies sans re-segmentation");
+        setStep("Classification sans re-segmentation");
         for (let i = 0; i < sampledFramesRef.current.length; i++) {
           const cached = sampledFramesRef.current[i];
           const frameResult = await predictFrame(cached.blob, i + 1, true, sessionId, false, cached.detections);
           predictions.push({
             t: cached.t,
             detections: cached.detections,
-            anomaly: frameResult.anomaly,
-            autoencoder: frameResult.autoencoder,
-            siamese: frameResult.siamese,
-            combined: frameResult.combined
+            fusion: frameResult.fusion
           });
           setPredictionCount(predictions.length);
           setProgress(Math.round(((i + 1) / sampledFramesRef.current.length) * 55));
@@ -316,8 +345,14 @@ export function useCspAnalysis() {
         const sampledFrames: SampledFrameCache[] = [];
         for (let i = 0; i < sampleTimes.length; i++) {
           const t = sampleTimes[i];
-          await new Promise<void>((resolve) => {
+          await new Promise<void>((resolve, reject) => {
+            if (Math.abs(video.currentTime - t) < 0.001 && video.readyState >= 2) { resolve(); return; }
+            const timeout = window.setTimeout(() => {
+              video.removeEventListener("seeked", onSeeked);
+              reject(new Error("Délai de lecture vidéo dépassé"));
+            }, 15000);
             const onSeeked = () => {
+              window.clearTimeout(timeout);
               video.removeEventListener("seeked", onSeeked);
               resolve();
             };
@@ -333,41 +368,67 @@ export function useCspAnalysis() {
           predictions.push({
             t,
             detections: frameResult.detections,
-            anomaly: frameResult.anomaly,
-            autoencoder: frameResult.autoencoder,
-            siamese: frameResult.siamese,
-            combined: frameResult.combined
+            fusion: frameResult.fusion
           });
+          drawDetections(ctx, frameResult.detections);
           sampledFrames.push({
             t,
             blob,
             detections: frameResult.detections
           });
           setPredictionCount(predictions.length);
-          setStep(includeAnomaly ? "Segmentation + anomalies" : "Segmentation YOLO");
+          setStep(includeAnomaly ? "Segmentation + classification" : "Segmentation YOLO");
           setProgress(Math.round(((i + 1) / sampleTimes.length) * 55));
         }
         sampledFramesRef.current = sampledFrames;
       }
 
-      const summary = summarizePredictions(predictions);
+      const summary = summarizePredictions(predictions, includeAnomaly ? refStats.average : null, includeAnomaly ? testStats.average : null);
+      if (includeAnomaly && summary.validFrames === 0) throw new Error("Aucune paire de tubes exploitable : classification indisponible.");
+      if (includeAnomaly) {
+        setStep("Capture du milieu de la vidéo");
+        const midpoint = duration / 2;
+        const capture = await captureVideoFrame(video, midpoint);
+        const captureContext = capture.getContext("2d");
+        if (!captureContext) throw new Error("Capture du rapport indisponible.");
+        if (!midpointFrameRef.current) {
+          const blob = await new Promise<Blob | null>(resolve => capture.toBlob(resolve, "image/jpeg", 0.95));
+          if (!blob) throw new Error("L’image du milieu de la vidéo n’a pas pu être extraite.");
+          const sampled = sampledFramesRef.current.find(frame => Math.abs(frame.t - midpoint) < 0.001);
+          // Les boîtes doivent correspondre à cette image précise, sans influencer la synthèse vidéo.
+          const detections = sampled?.detections ?? (await predictFrame(blob, 0, false, `${sessionId}-report`, true)).detections;
+          midpointFrameRef.current = { blob, detections, t: midpoint };
+        }
+        drawDetections(captureContext, midpointFrameRef.current.detections);
+        reportCaptureRef.current = {
+          dataUrl: capture.toDataURL("image/jpeg", 0.95),
+          width: capture.width, height: capture.height, time: midpoint
+        };
+      }
       setAiSummary(summary);
       setHasAnomalyAnalysis(includeAnomaly);
 
       setStep("Rendu vidéo");
-      video.currentTime = 0;
+      await seekVideoFrame(video, 0);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      drawDetections(ctx, predictions[0]?.detections ?? []);
 
       const stream = canvas.captureStream(30);
+      captureStream = stream;
       const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm";
       const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 3_000_000 });
+      activeRecorder = recorder;
       const chunks: BlobPart[] = [];
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) chunks.push(event.data);
       };
 
-      const done = new Promise<Blob>((resolve) => {
+      const done = new Promise<Blob>((resolve, reject) => {
         recorder.onstop = () => resolve(new Blob(chunks, { type: mime }));
+        recorder.onerror = () => reject(new Error("Échec de l’enregistrement vidéo"));
       });
+      // L'enregistreur peut échouer pendant l'attente de video.play().
+      void done.catch(() => {});
 
       const getNearest = (time: number) => {
         let nearest = predictions[0];
@@ -382,11 +443,12 @@ export function useCspAnalysis() {
         return nearest?.detections || [];
       };
 
-      video.playbackRate = 0.5;
+      video.playbackRate = 1.0;
       recorder.start();
       await video.play();
 
-      await new Promise<void>((resolve) => {
+      await Promise.race([done, new Promise<void>((resolve, reject) => {
+        video.onerror = () => reject(new Error("Lecture vidéo interrompue"));
         const render = () => {
           if (video.paused || video.ended) {
             resolve();
@@ -398,32 +460,35 @@ export function useCspAnalysis() {
 
           const nextProgress = 55 + Math.round((video.currentTime / duration) * 45);
           setProgress(Math.min(100, nextProgress));
-          requestAnimationFrame(render);
+          animationFrame = requestAnimationFrame(render);
         };
-        requestAnimationFrame(render);
-      });
+        animationFrame = requestAnimationFrame(render);
+      })]);
 
-      recorder.stop();
+      if (recorder.state !== "inactive") recorder.stop();
       const outBlob = await done;
+      stream.getTracks().forEach(track => track.stop());
       video.playbackRate = 1.0;
       const annotatedUrl = URL.createObjectURL(outBlob);
       setOutUrl(annotatedUrl);
       setProgress(100);
       setStep("Terminé");
-      setReportStatus(
-        includeAnomaly
-          ? allTemperaturesReady
-            ? `Décision vidéo ${videoDecisionLabel(summary.decision)}. Score max ${formatAnomalyScore(summary.maxAnomalyScore)}, persistance ${summary.longestSuspectRun} frame(s). Rapport PDF prêt à générer.`
-            : `Décision vidéo ${videoDecisionLabel(summary.decision)}. Score max ${formatAnomalyScore(summary.maxAnomalyScore)}, persistance ${summary.longestSuspectRun} frame(s). Compléter les 8 températures pour générer le rapport PDF.`
-          : allTemperaturesReady
-            ? "Segmentation terminée. Lancez l'analyse pour calculer les anomalies, puis générez le rapport PDF."
-            : "Segmentation terminée. Lancez l'analyse puis complétez les 8 températures pour générer le rapport PDF."
-      );
+      setReportStatus(includeAnomaly
+        ? `Niveau ${summary.level} : ${levelLabel(summary.level)}. ${summary.validFrames}/${summary.sampledFrames} images analysées. Rapport prêt.`
+        : "Segmentation terminée. Renseignez les températures, puis lancez la classification.");
     } catch (event) {
       const message = event instanceof Error ? event.message : "Erreur d'annotation vidéo";
       setError(message);
       setStep("Erreur");
     } finally {
+      if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+      if (activeRecorder && activeRecorder.state !== "inactive") activeRecorder.stop();
+      captureStream?.getTracks().forEach(track => track.stop());
+      video.pause();
+      video.onloadeddata = null;
+      video.onerror = null;
+      video.removeAttribute("src");
+      video.load();
       URL.revokeObjectURL(sourceUrl);
       setRunning(false);
     }
@@ -438,322 +503,10 @@ export function useCspAnalysis() {
     try {
       const { jsPDF } = await import("jspdf");
       const doc = new jsPDF({ unit: "mm", format: "a4" });
-      const createdAt = new Date();
-      const generatedAt = createdAt.toLocaleString("fr-FR", {
-        dateStyle: "medium",
-        timeStyle: "short"
-      });
-
-      doc.setProperties({
-        title: "Rapport analyse thermique CSP",
-        subject: "Résultats AI et températures tubes CSP"
-      });
-
-      const accent = [248, 132, 47] as const;
-      const text = [24, 24, 27] as const;
-      const muted = [105, 105, 112] as const;
-      const border = [232, 232, 235] as const;
-
-      const sectionTitle = (label: string, y: number) => {
-        doc.setTextColor(...text);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(15);
-        doc.text(label, 16, y);
-        doc.setDrawColor(...accent);
-        doc.setLineWidth(0.35);
-        doc.line(16, y + 7, 194, y + 7);
-      };
-
-      const metric = (label: string, value: string, x: number, y: number, w = 52) => {
-        doc.setDrawColor(...border);
-        doc.setFillColor(250, 250, 251);
-        doc.roundedRect(x, y, w, 22, 3, 3, "FD");
-        doc.setTextColor(...muted);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(7);
-        doc.text(label.toUpperCase(), x + 4, y + 7);
-        doc.setTextColor(...text);
-        doc.setFontSize(13);
-        doc.text(value, x + 4, y + 16);
-      };
-
-      const aiDetailCard = (title: string, value: string, explanation: string, x: number, y: number, w: number) => {
-        const height = 31;
-        doc.setDrawColor(...border);
-        doc.setFillColor(250, 250, 251);
-        doc.roundedRect(x, y, w, height, 3, 3, "FD");
-        doc.setTextColor(...text);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(8);
-        doc.text(title, x + 4, y + 7);
-        doc.setTextColor(...accent);
-        doc.setFontSize(9);
-        doc.text(value, x + 4, y + 14);
-        doc.setTextColor(...muted);
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(7.5);
-        doc.text(doc.splitTextToSize(explanation, w - 8), x + 4, y + 21, { maxWidth: w - 8 });
-      };
-
-      const buildInterpretation = () => {
-        const decisionText =
-          aiSummary.decision === "anomaly"
-            ? "La vidéo présente une anomalie probable sur le tube test."
-            : aiSummary.decision === "warning"
-              ? "La vidéo présente un comportement atypique à surveiller sur le tube test."
-              : "La vidéo reste globalement compatible avec un comportement normal du tube test.";
-
-        const thermalText =
-          aiSummary.maxAnomalyScore >= 0.42
-            ? `La comparaison thermique a relevé un écart marqué entre tube_ref et tube_test, avec un score maximal de ${formatAnomalyScore(aiSummary.maxAnomalyScore)} et une persistance de ${aiSummary.longestSuspectRun} frame(s).`
-            : aiSummary.maxAnomalyScore >= 0.26
-              ? `La comparaison thermique a détecté un écart modéré entre tube_ref et tube_test, avec un score maximal de ${formatAnomalyScore(aiSummary.maxAnomalyScore)}.`
-              : `La comparaison thermique n'a pas mis en évidence d'écart fort entre tube_ref et tube_test, le score maximal restant à ${formatAnomalyScore(aiSummary.maxAnomalyScore)}.`;
-
-        const autoencoderText =
-          aiSummary.autoencoderPeakRatio >= 1.25
-            ? `L'autoencoder renforce l'hypothèse d'anomalie: le tube test apparaît significativement plus atypique que le tube de référence (ratio maximal ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}).`
-            : aiSummary.autoencoderPeakRatio >= 1.1
-              ? `L'autoencoder apporte un signal complémentaire modéré: le tube test est légèrement plus atypique que le tube de référence (ratio maximal ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}).`
-              : `L'autoencoder n'apporte pas de confirmation forte: le tube test reste proche du tube de référence du point de vue reconstruction (ratio maximal ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}).`;
-
-        const siameseText =
-          aiSummary.siamesePeakProbability >= 0.6
-            ? `Le modèle Siamese compare directement les représentations des deux tubes et renforce fortement l'écart observé (probabilité maximale ${formatAnomalyScore(aiSummary.siamesePeakProbability)}, ${aiSummary.siameseSupportFrames} frame(s) soutenue(s)).`
-            : aiSummary.siamesePeakProbability >= 0.35
-              ? `Le modèle Siamese observe une différence complémentaire entre tube_ref et tube_test, sans constituer à lui seul une preuve suffisante (probabilité maximale ${formatAnomalyScore(aiSummary.siamesePeakProbability)}).`
-              : `Le modèle Siamese ne relève pas de différence forte entre les deux tubes (probabilité maximale ${formatAnomalyScore(aiSummary.siamesePeakProbability)}).`;
-
-        const synthesisText =
-          aiSummary.decision === "anomaly" && aiSummary.autoencoderPeakRatio >= 1.1
-            ? "La convergence entre comparaison thermique et autoencoder renforce la crédibilité de la détection."
-            : aiSummary.decision === "anomaly"
-              ? "L'alerte est principalement portée par la comparaison thermique; une vérification visuelle des frames au pic est recommandée."
-              : aiSummary.decision === "warning"
-                ? "Le résultat doit être interprété comme une alerte prudente, utile pour orienter une inspection manuelle ciblée."
-                : "L'absence de convergence forte entre les indicateurs est cohérente avec une vidéo normale ou faiblement contrastée.";
-
-        const temperatureText =
-          temperatureInterpretation.delta === null
-            ? "L'interprétation thermique par températures saisies reste indisponible faute de moyennes exploitables."
-            : `L'écart thermique absolu Delta T = |Ttest - Tref| vaut ${temperatureInterpretation.delta.toFixed(1)} °C, ce qui correspond au niveau ${temperatureInterpretation.level} : ${temperatureInterpretation.label.toLowerCase()}. ${temperatureInterpretation.description}`;
-
-        return [decisionText, thermalText, autoencoderText, siameseText, temperatureText, synthesisText];
-      };
-
-      doc.setFillColor(8, 8, 10);
-      doc.rect(0, 0, 210, 52, "F");
-      doc.setTextColor(...accent);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(12);
-      doc.text("Green Energy Park", 16, 18);
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(26);
-      doc.text("Rapport thermique CSP", 16, 33);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      doc.setTextColor(178, 178, 184);
-      doc.text(`Généré le ${generatedAt}`, 16, 43);
-
-      sectionTitle("Résumé AI", 68);
-      doc.setTextColor(...text);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      doc.text(`Vidéo source: ${videoFile?.name ?? "non renseignée"}`, 16, 84, { maxWidth: 172 });
-      metric("Frames", `${aiSummary.sampledFrames}`, 16, 96);
-      metric("Détections", `${aiSummary.totalDetections}`, 75, 96);
-      metric("Tube ref", `${aiSummary.tubeRefFrames}`, 134, 96);
-      metric("Tube test", `${aiSummary.tubeTestFrames}`, 16, 124);
-
-      sectionTitle("Détection d'anomalies", 162);
-      metric("Décision", videoDecisionLabel(aiSummary.decision), 16, 176, 58);
-      metric("Score max", formatAnomalyScore(aiSummary.maxAnomalyScore), 81, 176, 50);
-      metric("Score moyen", formatAnomalyScore(aiSummary.averageAnomalyScore), 138, 176, 56);
-      metric("Frames suspectes", `${aiSummary.warningFrameCount}`, 16, 204, 58);
-      metric("Pic temporel", formatTime(aiSummary.peakFrameTime), 81, 204, 50);
-      metric("Confiance", confidenceLabel(aiSummary.decisionConfidence), 138, 204, 56);
-
-      doc.setTextColor(...muted);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      doc.text(
-        `Sévérité pic: ${severityLabel(aiSummary.peakSeverity)} · Ratio suspect: ${(aiSummary.suspectFrameRatio * 100).toFixed(1)}% · Persistance max: ${aiSummary.longestSuspectRun} frame(s)`,
-        16,
-        233,
-        { maxWidth: 178 }
-      );
-      doc.setTextColor(...text);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(10);
-      doc.text("Détail des systèmes de détection", 16, 247);
-
-      const thermalExplanation =
-        aiSummary.maxAnomalyScore >= 0.42
-          ? "Compare les profils thermiques tube-ref et tube-test. Un écart fort et persistant est détecté."
-          : aiSummary.maxAnomalyScore >= 0.26
-            ? "Compare les profils thermiques des deux tubes. Un écart modéré est observé."
-            : "Compare les profils thermiques des deux tubes. Aucun écart fort n'est observé.";
-      const autoencoderExplanation =
-        aiSummary.autoencoderPeakRatio >= 1.25
-          ? "Reconstruit l'apparence attendue d'un tube normal. Le tube-test s'en éloigne fortement."
-          : aiSummary.autoencoderPeakRatio >= 1.1
-            ? "Reconstruit l'apparence attendue d'un tube normal. Un écart complémentaire est observé."
-            : "Reconstruit l'apparence attendue d'un tube normal. Pas de confirmation forte d'anomalie.";
-      const siameseExplanation =
-        aiSummary.siamesePeakProbability >= 0.6
-          ? "Compare directement les deux tubes. La différence visuelle estimée est forte."
-          : aiSummary.siamesePeakProbability >= 0.35
-            ? "Compare directement les deux tubes. Une différence perceptible est estimée."
-            : "Compare directement les deux tubes. Pas de différence anormale forte estimée.";
-
-      aiDetailCard(
-        "THERMIQUE",
-        `Pic ${formatAnomalyScore(aiSummary.maxAnomalyScore)}`,
-        thermalExplanation,
-        16,
-        253,
-        56
-      );
-      aiDetailCard(
-        "AUTOENCODER",
-        `Ratio ${formatAnomalyScore(aiSummary.autoencoderPeakRatio)}`,
-        autoencoderExplanation,
-        77,
-        253,
-        56
-      );
-      aiDetailCard(
-        "SIAMESE",
-        `Prob. ${formatAnomalyScore(aiSummary.siamesePeakProbability)}`,
-        siameseExplanation,
-        138,
-        253,
-        56
-      );
-
-      // Keep the temperature table together on its own page so optional fields
-      // cannot collide with the anomaly summary or fall below the page edge.
-      doc.addPage();
-      sectionTitle("Températures relevées", 24);
-      const rows = [
-        { label: "tube-ref", values: tubeRefTemps, average: refStats.average },
-        { label: "tube-test", values: tubeTestTemps, average: testStats.average }
-      ];
-
-      let y = 38;
-      rows.forEach((row) => {
-        const labels = row.values.map((_, index) => `${getTemperaturePointLabel(index)}: ${row.values[index] || "--"} °C`);
-        const lineA = labels.filter((_, index) => index % 2 === 0).join("    ");
-        const lineB = labels.filter((_, index) => index % 2 === 1).join("    ");
-        const rowHeight = lineB ? 31 : 25;
-
-        if (y + rowHeight > 270) {
-          doc.addPage();
-          sectionTitle("Températures relevées (suite)", 24);
-          y = 38;
-        }
-
-        doc.setDrawColor(...border);
-        doc.setFillColor(250, 250, 251);
-        doc.roundedRect(16, y, 178, rowHeight, 3, 3, "FD");
-        doc.setTextColor(...text);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(10);
-        doc.text(row.label, 22, y + 8);
-        doc.setTextColor(...muted);
-        doc.setFont("helvetica", "normal");
-        doc.text(`Moyenne: ${formatAverage(row.average)}`, 142, y + 8);
-        doc.text(lineA, 22, y + 16, { maxWidth: 150 });
-        if (lineB) doc.text(lineB, 22, y + 22, { maxWidth: 150 });
-        y += rowHeight + 8;
-      });
-
-      if (y + 54 > 275) {
-        doc.addPage();
-        sectionTitle("Températures relevées (suite)", 24);
-        y = 38;
-      }
-
-      doc.setFillColor(246, 246, 247);
-      doc.roundedRect(16, y + 2, 178, 18, 3, 3, "F");
-      doc.setTextColor(...muted);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8);
-      doc.text(
-        "Rapport généré localement à partir des résultats IA disponibles et des températures saisies.",
-        22,
-        y + 13,
-        { maxWidth: 166 }
-      );
-
-      const tempInfoY = y + 26;
-      doc.setDrawColor(...border);
-      doc.setFillColor(250, 250, 251);
-      doc.roundedRect(16, tempInfoY, 178, 26, 3, 3, "FD");
-      doc.setTextColor(...muted);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(9);
-      doc.text("Interprétation Delta T", 22, tempInfoY + 9);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      const deltaLabel =
-        temperatureInterpretation.delta === null
-          ? "Delta T non disponible"
-          : `Delta T = |Ttest - Tref| = ${temperatureInterpretation.delta.toFixed(1)} °C · Niveau ${temperatureInterpretation.level} · ${temperatureInterpretation.label}`;
-      doc.text(deltaLabel, 22, tempInfoY + 16, { maxWidth: 166 });
-      doc.text(temperatureInterpretation.description, 22, tempInfoY + 22, { maxWidth: 166 });
-
-      doc.addPage();
-      sectionTitle("Interprétation Finale", 24);
-      doc.setTextColor(...text);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(12);
-      doc.text("Lecture des indicateurs", 16, 40);
-      doc.setTextColor(...muted);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      doc.text(
-        "La comparaison thermique mesure l'écart relatif entre tube_ref (référence saine) et tube_test. L'autoencoder mesure à quel point le tube test s'écarte d'un comportement visuel/thermique appris comme normal.",
-        16,
-        50,
-        { maxWidth: 178 }
-      );
-
-      const interpretation = buildInterpretation();
-      let interpretationY = 74;
-      interpretation.forEach((paragraph) => {
-        const lines = doc.splitTextToSize(paragraph, 174);
-        doc.setTextColor(...text);
-        doc.text(lines, 20, interpretationY);
-        interpretationY += lines.length * 6 + 6;
-      });
-
-      doc.setDrawColor(...border);
-      doc.setFillColor(250, 250, 251);
-      doc.roundedRect(16, interpretationY + 2, 178, 30, 3, 3, "FD");
-      doc.setTextColor(...muted);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(9);
-      doc.text("Recommandation opérationnelle", 22, interpretationY + 12);
-      doc.setFont("helvetica", "normal");
-      doc.text(
-        aiSummary.decision === "anomaly"
-          ? "Inspecter prioritairement les frames autour du pic temporel et confronter la détection aux observations terrain."
-          : aiSummary.decision === "warning"
-            ? "Contrôler visuellement les frames signalées et confirmer l'écart thermique avant de conclure à une anomalie."
-            : "Aucune anomalie forte n'est confirmée; conserver la vidéo comme référence normale si l'inspection terrain confirme l'état sain.",
-        22,
-        interpretationY + 20,
-        { maxWidth: 166 }
-      );
-
-      const blob = doc.output("blob");
-      const url = URL.createObjectURL(blob);
-      setReportUrl((previous) => {
-        if (previous) URL.revokeObjectURL(previous);
-        return url;
-      });
-      setReportStatus(`PDF généré le ${generatedAt}.`);
+      const generatedAt = new Date().toLocaleString("fr-FR");
+      drawFusionReport(doc, aiSummary, reportCaptureRef.current, { ref: tubeRefTemps.map(Number), test: tubeTestTemps.map(Number) }, inspection);
+      setReportUrl(URL.createObjectURL(doc.output("blob")));
+      setReportStatus(`Rapport synthétique généré le ${generatedAt}.`);
     } catch (event) {
       const message = event instanceof Error ? event.message : "Erreur de génération PDF";
       setReportStatus(`Erreur: ${message}`);
@@ -763,7 +516,7 @@ export function useCspAnalysis() {
   }
 
   function handleSegmentationAction() {
-    if (running) return;
+    if (running || generatingReport) return;
     if (!videoFile) {
       fileInputRef.current?.click();
       return;
@@ -773,7 +526,7 @@ export function useCspAnalysis() {
   }
 
   function handleAnomalyAnalysisAction() {
-    if (running) return;
+    if (running || generatingReport) return;
     if (!videoFile) {
       fileInputRef.current?.click();
       return;
@@ -784,7 +537,7 @@ export function useCspAnalysis() {
 
   function handleReportAction() {
     if (!canGenerateReport) {
-      setReportStatus("Lancez d'abord l'analyse d'anomalies, puis vérifiez les températures avant de générer le PDF.");
+      setReportStatus("Renseignez les températures puis lancez la classification avant de générer le PDF.");
       return;
     }
 
@@ -792,6 +545,10 @@ export function useCspAnalysis() {
   }
 
   return {
+    inspection,
+    updateInspection,
+    canAnalyze,
+    allTemperaturesReady,
     aiSummary,
     backendStatus,
     canGenerateReport,
