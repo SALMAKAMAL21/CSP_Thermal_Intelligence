@@ -1,155 +1,92 @@
-# Frontend Next.js - Green Energy Park
+# Frontend — CSP Thermal Intelligence
 
-Ce frontend sert à tester ton modèle de segmentation sur:
-- images RGB/thermiques
-- vidéos RGB/thermiques
+Interface d’inspection thermique personnalisée par **[Salma Kamal](https://github.com/SALMAKAMAL21)** pour le projet **Green Energy Park**.
 
-Objectif métier:
-- détecter les tubes recepteurs
-- afficher les labels `tube_ref` et `tube_test` renvoyés par le backend
-- saisir les températures associées à chaque label
+**Encadrant : Amine Moulay Taj**  
+**Période du stage : du 09/03/2026 au 09/09/2026**
 
----
+Le frontend utilise **Next.js 14**, **React 18** et **TypeScript**. Il permet de préparer une inspection, de visualiser la segmentation des tubes, de consulter le diagnostic et de générer un rapport PDF.
 
-## 1) Vue globale (Frontend + Backend)
+Consulter le [README principal](../README.md) pour installer le backend, les modèles et les dépendances Python.
 
-### Frontend (Next.js)
-Rôle:
-- uploader une vidéo
-- extraire des frames vidéo
-- appeler l'API IA
-- afficher les annotations
-- générer une vidéo annotée de sortie
-- générer un rapport PDF à partir des résultats AI et des températures
+## Installation et lancement
 
-Fichier principal:
-- `frontend/app/page.tsx`
+Depuis le dossier `frontend`, dans PowerShell :
 
-### Backend (FastAPI)
-Rôle:
-- charger le modèle YOLO (`best_model.pt` prioritaire)
-- recevoir une image (`/predict`)
-- lancer l'inférence
-- renvoyer détections (bbox, masques, score)
-- appliquer la règle métier haut/bas pour stabiliser `tube_ref`/`tube_test`
-
-Fichier principal:
-- `src/inference/api.py`
-
-### Liaison Frontend ↔ Backend
-Le frontend n'appelle pas directement l'API Python. Il passe par 2 routes Next.js:
-- `GET /api/segment-check` → proxy vers `{SEGMENTATION_API_URL}/health`
-- `POST /api/segment-predict` → proxy vers `{SEGMENTATION_API_URL}/predict`
-
-Pourquoi:
-- centraliser la config backend (`.env.local`)
-- gérer proprement les erreurs
-- éviter CORS compliqué côté navigateur
-
----
-
-## 2) Flux Image (simple)
-
-1. Tu upload une image.
-2. Le frontend envoie l'image à `/api/segment-predict`.
-3. La route Next.js forwarde au backend FastAPI `/predict`.
-4. Le backend retourne les détections.
-5. Le frontend dessine les bbox/polygones sur un canvas.
-
-Ce flux sert de debug pur du modèle (sans complexité vidéo).
-
----
-
-## 3) Flux Vidéo (réel)
-
-1. Tu upload une vidéo.
-2. Le frontend lit la vidéo cachée (`<video>` interne).
-3. Il échantillonne des frames (sampling).
-4. Chaque frame est envoyée à `/api/segment-predict`.
-5. Le frontend stocke les détections par instant `t`.
-6. Stabilisation temporelle: si une frame a 0 détection, on reprend la détection valide la plus proche (avant/après).
-7. Rendu final: le frontend rejoue la vidéo sur un canvas et dessine les annotations correspondantes.
-8. Export: enregistrement via `MediaRecorder` → vidéo `.webm` annotée.
-
-Pourquoi tu voyais des trous au milieu:
-- certaines frames thermiques avaient confiance plus faible
-- détections intermittentes
-- maintenant partiellement compensé par la stabilisation temporelle
-
----
-
-## 4) Logique métier des classes
-
-Les deux tubes se ressemblent visuellement.
-Le backend applique une convention métier stable après détection:
-- tube le plus haut = `tube_ref`
-- tube le plus bas = `tube_test`
-
-Cette logique ne doit pas être forcée côté frontend: l'interface affiche seulement les labels renvoyés par l'API et collecte les températures associées.
-
-Conséquence positive:
-- moins d'inversions `ref/test` dans la vidéo
-- cohérence métier même si le modèle hésite sur la classe brute
-
----
-
-## 5) Paramètre `conf` (seuil de confiance)
-
-`conf` = confiance minimale pour garder une détection.
-
-- `conf` haut (ex 0.30): moins de faux positifs, mais plus de ratés
-- `conf` plus bas (ex 0.18–0.22): récupère plus de tubes difficiles (utile en thermique)
-
-Dans tes tests, baisser légèrement `conf` aide sur les frames du milieu thermique.
-
----
-
-## 6) Modèle chargé par le backend
-
-Ordre de priorité actuel:
-1. variable d'environnement `MODEL_PATH` (si définie)
-2. `ml/best_model.pt`
-3. `ml/yolo_seg.pt`
-4. autres fallbacks
-
-Donc si tu as placé le modèle dans `ml/best_model.pt`, il sera utilisé automatiquement.
-
----
-
-## 7) Commandes de démarrage
-
-### Backend
-```bash
-uvicorn src.inference.api:app --host 0.0.0.0 --port 8002 --reload
+```powershell
+npm.cmd ci
+if (-not (Test-Path .env.local)) {
+    Copy-Item .env.example .env.local
+}
+npm.cmd run dev
 ```
 
-### Frontend
-```bash
-cd frontend
-npm install
-npm run dev
-```
+L’application est accessible sur [http://localhost:3000](http://localhost:3000). Le backend FastAPI doit être lancé séparément sur le port `8002`.
 
-`.env.local` (frontend):
+Configuration de `.env.local` :
+
 ```env
 SEGMENTATION_API_URL=http://127.0.0.1:8002
 ```
 
----
+Redémarrer le serveur Next.js après une modification de cette configuration.
 
-## 8) Fichiers importants
+Pour compiler puis démarrer la version de production, arrêter le serveur de développement et exécuter :
 
-- `frontend/app/page.tsx` : logique UI + pipeline image/vidéo
-- `frontend/app/api/segment-predict/route.ts` : proxy prédiction
-- `frontend/app/api/segment-check/route.ts` : proxy health
-- `src/inference/api.py` : backend IA FastAPI
+```powershell
+npm.cmd run build
+npm.cmd run start
+```
 
----
+## Parcours opérateur
 
-## 9) Limites actuelles
+1. Saisir le nom de l’opérateur et le numéro de série du tube.
+2. Importer une vidéo thermique.
+3. Renseigner au moins quatre mesures pour chaque tube et l’observation visuelle.
+4. Lancer l’analyse, puis consulter les annotations et l’interprétation.
+5. Générer et télécharger `rapport_thermique_csp.pdf`.
 
-- vidéos thermiques: encore quelques cas difficiles (contraste variable, texture faible)
-- la post-règle backend haut/bas suppose que les deux tubes restent visibles et ordonnés verticalement
+La date et l’heure sont complétées automatiquement au lancement si elles sont laissées vides. L’analyse attend que les autres données requises soient complètes. Une modification des données invalide le diagnostic précédent.
 
-Amélioration future recommandée:
-- ajouter plus de frames thermiques "milieu de séquence" dans le dataset d'entraînement
+## Fichiers principaux
+
+| Fichier | Rôle |
+|---|---|
+| [app/page.tsx](app/page.tsx) | Formulaire d’inspection, vidéo, résultats et téléchargement du rapport |
+| [app/inspection.css](app/inspection.css) | Mise en page de l’interface d’inspection |
+| [hooks/use-csp-analysis.ts](hooks/use-csp-analysis.ts) | Lecture vidéo, appels API, cache des détections et exports |
+| [lib/inspection.ts](lib/inspection.ts) | Validation des informations et date/heure automatiques |
+| [lib/thermal.ts](lib/thermal.ts) | Mesures thermiques et agrégation des prédictions |
+| [lib/inspection-results.ts](lib/inspection-results.ts) | Libellés, constats et interprétations des diagnostics |
+| [lib/video-frame.ts](lib/video-frame.ts) | Extraction d’une image à un instant précis de la vidéo |
+| [lib/fusion-report.ts](lib/fusion-report.ts) | Composition du rapport PDF avec jsPDF |
+| [lib/backend.ts](lib/backend.ts) | Adresse et appels du backend FastAPI |
+| [lib/api-response.ts](lib/api-response.ts) | Lecture et validation des réponses JSON dans le navigateur |
+
+## Liaison avec le backend
+
+Le navigateur passe par les routes du serveur Next.js :
+
+| Route Next.js | Route FastAPI | Usage |
+|---|---|---|
+| `GET /api/segment-check` | `/health` et `/model/info` | État du backend et des modèles |
+| `POST /api/segment-predict` | `/predict` | Segmentation et classification d’une image |
+| `POST /api/segment-predict` avec `detections_json` | `/analyze-anomaly` | Classification utilisant les détections déjà calculées |
+
+Le traitement échantillonne une image par seconde. Les annotations affichent les classes renvoyées par YOLO. La vidéo annotée est enregistrée au format WebM dans le navigateur avec `MediaRecorder`.
+
+## Export du rapport
+
+Le rapport utilise une image extraite au milieu de la vidéo source, avec ses annotations. L’image complète garde ses proportions pour préserver la visibilité des tubes.
+
+Le tableau affiche les températures, les écarts absolus `|T_ref - T_test|` et leur moyenne. Le modèle de classification utilise l’écart **signé** entre les moyennes des deux tubes. Le diagnostic et l’interprétation proviennent du résultat de l’analyse.
+
+La mise en page garde les rapports usuels de quatre à six mesures sur une page et prévoit une pagination pour les séries plus longues.
+
+## Fichiers générés
+
+- `.next-dev/` : fichiers générés par le serveur de développement.
+- `.next/` : compilation de production.
+- `node_modules/` : dépendances installées par npm.
+
+Ces dossiers sont exclus du dépôt par `.gitignore`. `npm.cmd` permet de lancer npm sous Windows sans utiliser le script PowerShell `npm.ps1`.
